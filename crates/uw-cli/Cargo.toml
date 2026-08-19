@@ -1,0 +1,21 @@
+[package]
+name = "uw-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "uw"
+path = "src/main.rs"
+
+[dependencies]
+uw-core = { path = "../uw-core" }
+
+anyhow.workspace = true
+tokio.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+
+clap = { version = "4", features = ["derive"] }
+open = "5"

@@ -1,0 +1,36 @@
+[package]
+name = "uw-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+chrono.workspace = true
+url.workspace = true
+tracing.workspace = true
+
+base64 = "0.22"
+sha2 = "0.10"
+rand = "0.8"
+dirs = "5"
+toml = "0.8"
+
+# The OS keychain is used where one exists without extra system libraries.
+# Linux is deliberately excluded: the Secret Service backend needs D-Bus and
+# libdbus-1-dev, and WSL runs no Secret Service daemon at all — so Linux uses
+# the 0600 file store in `auth::store` instead.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
