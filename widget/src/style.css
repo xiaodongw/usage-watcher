@@ -1,0 +1,48 @@
+/* One palette, defined light-first and swapped under prefers-color-scheme, so
+   the widget matches the desktop it sits on rather than fighting it. */
+:root {
+  --bg: #ffffff;
+  --fg: #16181d;
+  --fg-dim: #5a6070;
+  --fg-faint: #8b91a1;
+  --rule: #e6e8ee;
+  --track: #eceef3;
+  --ok: #3b9c65;
+  --warn: #c98a1b;
+  --crit: #cf4a4a;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181d;
+    --fg: #e7e9ee;
+    --fg-dim: #a0a6b4;
+    --fg-faint: #6f7686;
+    --rule: #262a33;
+    --track: #23272f;
+    --ok: #4cae76;
+    --warn: #d9a441;
+    --crit: #e46a6a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  /* The Tauri window is sized to the content, so the body must not scroll. */
+  overflow: hidden;
+}

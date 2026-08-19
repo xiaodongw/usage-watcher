@@ -87,6 +87,84 @@ pub trait Adapter: Send + Sync {
     }
 }
 
+/// Every adapter, as one dispatchable value.
+///
+/// [`Adapter`] is deliberately not object-safe — `fetch` returns an RPIT future
+/// so that a poll allocates nothing — which means `Vec<dyn Adapter>` is out.
+/// This enum is the price: one arm per provider, and in exchange there is
+/// exactly one place that lists what providers exist.
+#[derive(Debug, Clone, Copy)]
+pub enum Any {
+    Claude(claude::Claude),
+    Codex(codex::Codex),
+}
+
+impl Any {
+    /// Every provider that exists, in display order.
+    pub fn all() -> Vec<Any> {
+        vec![Any::Claude(claude::Claude), Any::Codex(codex::Codex)]
+    }
+
+    pub fn id(&self) -> &'static str {
+        match self {
+            Any::Claude(a) => a.id(),
+            Any::Codex(a) => a.id(),
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Any::Claude(a) => a.label(),
+            Any::Codex(a) => a.label(),
+        }
+    }
+
+    pub fn delegated_path(&self) -> Option<PathBuf> {
+        match self {
+            Any::Claude(a) => a.delegated_path(),
+            Any::Codex(a) => a.delegated_path(),
+        }
+    }
+
+    pub fn token_source(&self, pref: AuthPreference) -> Result<TokenSource> {
+        match self {
+            Any::Claude(a) => a.token_source(pref),
+            Any::Codex(a) => a.token_source(pref),
+        }
+    }
+
+    pub async fn fetch(
+        &self,
+        http: &reqwest::Client,
+        cred: &Credential,
+        kind: crate::model::AuthKind,
+    ) -> Result<Provider> {
+        match self {
+            Any::Claude(a) => a.fetch(http, cred, kind).await,
+            Any::Codex(a) => a.fetch(http, cred, kind).await,
+        }
+    }
+
+    /// Default poll intervals in seconds, `(active, idle)`, before config
+    /// overrides and the 30-second floor.
+    ///
+    /// "Active" means the provider is currently consuming something. Claude's
+    /// 5-hour window moves fast enough to be worth a minute; Codex only
+    /// publishes a 7-day bucket, so polling it that often would tell us
+    /// nothing new.
+    pub fn poll_intervals(&self) -> (u64, u64) {
+        match self {
+            Any::Claude(_) => (60, 300),
+            Any::Codex(_) => (120, 600),
+        }
+    }
+
+    /// `None` for an id we do not have an adapter for.
+    pub fn by_id(id: &str) -> Option<Any> {
+        Any::all().into_iter().find(|a| a.id() == id)
+    }
+}
+
 /// Read a vendor CLI's credential file. Dispatches on provider id because each
 /// CLI uses a different on-disk shape.
 ///
@@ -101,15 +179,11 @@ pub fn read_delegated(provider: &str, path: &Path) -> Result<Credential> {
 
 /// Run a provider's [`Adapter::enrich`] hook. Dispatches on provider id for
 /// the same reason [`read_delegated`] does: callers hold a string, not a type.
-pub async fn enrich(
-    provider: &str,
-    http: &reqwest::Client,
-    cred: &mut Credential,
-) -> Result<()> {
-    match provider {
-        "claude" => claude::Claude.enrich(http, cred).await,
-        "codex" => codex::Codex.enrich(http, cred).await,
-        _ => Ok(()),
+pub async fn enrich(provider: &str, http: &reqwest::Client, cred: &mut Credential) -> Result<()> {
+    match Any::by_id(provider) {
+        Some(Any::Claude(a)) => a.enrich(http, cred).await,
+        Some(Any::Codex(a)) => a.enrich(http, cred).await,
+        None => Ok(()),
     }
 }
 

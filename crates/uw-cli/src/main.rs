@@ -95,18 +95,8 @@ async fn status(as_json: bool) -> Result<()> {
     let cfg = Config::load()?;
     let http = uw_core::http_client();
 
-    // Adapters are dispatched by hand rather than through `Vec<dyn Adapter>`:
-    // `fetch` returns an RPIT future, so the trait is not object-safe. Polling
-    // them concurrently means one slow provider never delays the others.
-    let (claude, codex) = tokio::join!(
-        fetch_one(&Claude, &cfg, &http),
-        fetch_one(&Codex, &cfg, &http),
-    );
-
-    let providers: Vec<Provider> = [claude, codex]
-        .into_iter()
-        .flatten()
-        .collect();
+    // Concurrent, so one slow provider never delays the others.
+    let providers = uw_core::collect::poll_all(&cfg, &http).await;
 
     if as_json {
         let snap = uw_core::Snapshot {
@@ -118,46 +108,6 @@ async fn status(as_json: bool) -> Result<()> {
         print_table(&providers);
     }
     Ok(())
-}
-
-/// Returns `None` when the provider is switched off in config, so a disabled
-/// provider vanishes entirely rather than showing up as an error.
-async fn fetch_one<A: Adapter>(
-    adapter: &A,
-    cfg: &Config,
-    http: &uw_core::reqwest::Client,
-) -> Option<Provider> {
-    if !cfg.is_enabled(adapter.id()) {
-        return None;
-    }
-    let pref = cfg.auth_pref(adapter.id());
-
-    let attempt = async {
-        let source = adapter.token_source(pref)?;
-        let cred = source.access_token().await?;
-        adapter.fetch(http, &cred, source.kind()).await
-    };
-
-    Some(match attempt.await {
-        Ok(p) => p,
-        // A provider that fails must still appear, clearly marked. Silently
-        // dropping it would look identical to "nothing to report".
-        Err(e) => Provider {
-            id: adapter.id().to_string(),
-            label: adapter.label().to_string(),
-            plan: None,
-            status: Status::Error {
-                message: format!("{e:#}"),
-            },
-            auth: match pref {
-                AuthPreference::Own => AuthKind::OwnGrant,
-                AuthPreference::Delegated => AuthKind::Delegated,
-                AuthPreference::Token => AuthKind::ApiKey,
-            },
-            updated_at: chrono::Utc::now(),
-            meters: Vec::new(),
-        },
-    })
 }
 
 async fn auth(command: AuthCommand) -> Result<()> {

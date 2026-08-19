@@ -1,0 +1,28 @@
+# Deliberately its own workspace, not a member of the root one: building it
+# needs the platform webview toolchain (webkit2gtk on Linux), which the daemon
+# and CLI do not, and a WSL checkout typically has none of it. Keeping it
+# separate means `cargo test` at the repo root stays green everywhere.
+[workspace]
+
+[package]
+name = "usage-watcher-widget"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-notification = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

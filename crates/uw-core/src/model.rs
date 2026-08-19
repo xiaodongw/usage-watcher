@@ -5,14 +5,22 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// `export_to` is resolved relative to the directory of *this source file*, not
+// the crate root, which is why the path climbs three levels rather than two.
+// `cargo test` regenerates the widget's `src/types/`; nothing there is
+// hand-written.
+
+#[derive(TS, Debug, Clone, Serialize, Deserialize)]
+#[ts(export, export_to = "../../../widget/src/types/")]
 pub struct Snapshot {
     pub generated_at: DateTime<Utc>,
     pub providers: Vec<Provider>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(TS, Debug, Clone, Serialize, Deserialize)]
+#[ts(export, export_to = "../../../widget/src/types/")]
 pub struct Provider {
     pub id: String,
     pub label: String,
@@ -25,8 +33,9 @@ pub struct Provider {
     pub meters: Vec<Meter>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "snake_case")]
+#[ts(export, export_to = "../../../widget/src/types/")]
 pub enum Status {
     Ok,
     /// Last read succeeded but is older than we'd like — show the number, dimmed.
@@ -37,8 +46,9 @@ pub enum Status {
     Unavailable { reason: String },
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../widget/src/types/")]
 pub enum AuthKind {
     /// We hold our own OAuth grant and refresh it ourselves.
     OwnGrant,
@@ -48,7 +58,8 @@ pub enum AuthKind {
     None,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(TS, Debug, Clone, Serialize, Deserialize)]
+#[ts(export, export_to = "../../../widget/src/types/")]
 pub struct Meter {
     pub id: String,
     pub label: String,
@@ -56,8 +67,9 @@ pub struct Meter {
     pub severity: Severity,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(TS, Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[ts(export, export_to = "../../../widget/src/types/")]
 pub enum MeterKind {
     /// A rolling usage window: the "28% of your 5 hours" case.
     Window {
@@ -80,15 +92,17 @@ pub enum MeterKind {
     },
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../widget/src/types/")]
 pub enum Period {
     Rolling30d,
     AllTime,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../widget/src/types/")]
 pub enum Severity {
     Normal,
     Warning,

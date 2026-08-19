@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/uw-core", "crates/uw-cli"]
+exclude = ["widget/src-tauri"]
+members = ["crates/uw-core", "crates/uw-cli", "crates/uwd"]
 
 [workspace.package]
 version = "0.1.0"

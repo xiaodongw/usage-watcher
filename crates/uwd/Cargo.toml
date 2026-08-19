@@ -1,0 +1,31 @@
+[package]
+name = "uwd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "uwd"
+path = "src/main.rs"
+
+[dependencies]
+uw-core = { path = "../uw-core" }
+
+anyhow.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+
+axum = "0.8"
+tokio-stream = { version = "0.1", features = ["sync"] }
+tower-http = { version = "0.6", features = ["cors"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+ts-rs = { version = "10", features = ["chrono-impl"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

@@ -24,6 +24,7 @@ const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 /// Codex registers a fixed redirect, so this port is not negotiable.
 const REDIRECT_PORT: u16 = 1455;
 
+#[derive(Debug, Clone, Copy)]
 pub struct Codex;
 
 impl Adapter for Codex {

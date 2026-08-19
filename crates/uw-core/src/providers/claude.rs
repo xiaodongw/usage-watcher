@@ -64,6 +64,7 @@ const AUTHORIZE_SCOPES: [&str; 6] = [
     "user:file_upload",
 ];
 
+#[derive(Debug, Clone, Copy)]
 pub struct Claude;
 
 impl Adapter for Claude {

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Usage Watcher",
+  "version": "0.1.0",
+  "identifier": "dev.usagewatcher.widget",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "panel",
+        "title": "Usage Watcher",
+        "width": 340,
+        "height": 300,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "skipTaskbar": true,
+        "visible": false,
+        "center": false
+      }
+    ],
+    "security": {
+      "comment": "connect-src must name every daemon the widget may talk to. Loopback covers the default and the WSL case (WSL2 forwards localhost); add a Tailscale host here if you point the widget at one.",
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:7878 http://localhost:7878; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    },
+    "trayIcon": {
+      "id": "main",
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true,
+      "tooltip": "Usage Watcher"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png"],
+    "shortDescription": "Remaining usage across your AI subscriptions"
+  }
+}

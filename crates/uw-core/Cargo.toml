@@ -21,6 +21,8 @@ sha2 = "0.10"
 rand = "0.8"
 dirs = "5"
 toml = "0.8"
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+ts-rs = { version = "10", features = ["chrono-impl"] }
 
 # The OS keychain is used where one exists without extra system libraries.
 # Linux is deliberately excluded: the Secret Service backend needs D-Bus and

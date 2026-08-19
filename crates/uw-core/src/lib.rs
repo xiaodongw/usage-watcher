@@ -2,6 +2,7 @@
 //! provider adapters. Both the CLI and the Tauri widget build on this.
 
 pub mod auth;
+pub mod collect;
 pub mod config;
 pub mod model;
 pub mod providers;

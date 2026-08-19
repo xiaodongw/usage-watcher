@@ -1,2 +1,7 @@
 target/
 .idea/
+node_modules/
+dist/
+widget/src-tauri/target/
+.env
+.env.local
