@@ -28,6 +28,62 @@ npm --prefix widget install
 npm --prefix widget run dev            # panel at http://localhost:5173
 ```
 
+## Running it in WSL
+
+This is the fastest way to see the UI, and it needs no toolchain beyond Rust and
+Node — the browser view is the same Vue app the tray widget hosts, just without
+the tray. Two terminals:
+
+```sh
+# 1 — the collector. Foreground, so you can watch it poll.
+UWD_LOG=uwd=debug cargo run -p uwd
+
+# 2 — the panel.
+npm --prefix widget run dev
+```
+
+Then open **http://localhost:5173** in your Windows browser. WSL2 forwards
+`localhost`, so the page reaches the daemon on `127.0.0.1:7878` inside WSL
+without any configuration.
+
+To leave them running while you do something else, detach and keep the logs:
+
+```sh
+cargo build -p uwd
+(UWD_LOG=uwd=debug nohup ./target/debug/uwd > /tmp/uwd.log 2>&1 &)
+(cd widget && nohup npm run dev > /tmp/vite.log 2>&1 &)
+
+tail -f /tmp/uwd.log     # one line per poll at debug level
+pkill -x uwd            # stop the daemon (-x matches the process name exactly,
+                        # so it cannot catch a shell that merely mentions the path)
+```
+
+### Checking it works
+
+```sh
+curl -s localhost:7878/health                 # {"ok":true,...}
+curl -s localhost:7878/snapshot | jq          # what the panel is rendering
+curl -sN localhost:7878/events                # watch frames arrive live
+uw                                            # same data, no daemon involved
+```
+
+In the panel itself: the dot beside the headline is green while the stream is
+live, and the timestamp on the right counts up between polls, resetting each
+time a provider re-polls.
+
+Killing the daemon is a good check of the failure path — the panel keeps the
+numbers on screen, dims them, and says it lost the connection rather than going
+blank. Start it again and `EventSource` reconnects on its own; the daemon sends
+the current snapshot as its first frame, so the panel repaints immediately
+instead of waiting for the next poll.
+
+### What the browser view does not have
+
+The tray icon, the frameless always-on-top panel, and native notifications live
+in the Tauri shell, which is a separate build — see
+[Building the widget](#building-the-widget). Everything else, including the
+alert stream, is identical.
+
 ## Auth modes
 
 Set per provider with `uw auth mode <provider> <mode>`:
