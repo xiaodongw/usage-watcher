@@ -26,14 +26,7 @@
       }
     ],
     "security": {
-      "comment": "connect-src must name every daemon the widget may talk to. Loopback covers the default and the WSL case (WSL2 forwards localhost); add a Tailscale host here if you point the widget at one.",
       "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:7878 http://localhost:7878; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
-    },
-    "trayIcon": {
-      "id": "main",
-      "iconPath": "icons/icon.png",
-      "iconAsTemplate": true,
-      "tooltip": "Usage Watcher"
     }
   },
   "bundle": {

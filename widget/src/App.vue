@@ -3,34 +3,26 @@ import { computed } from "vue";
 import ProviderTile from "./components/ProviderTile.vue";
 import { useDaemon, useNow } from "./lib/daemon";
 import { ago, mostConstrained } from "./lib/format";
+import { notify, requestBrowserPermission } from "./lib/notify";
 import type { Alert } from "./types/Alert";
 
 const now = useNow();
 
-/**
- * Threshold crossings arrive as their own event so the widget does not have to
- * diff snapshots to notice one. In the browser this is a `Notification`; under
- * Tauri the same handler will call the native notification plugin.
- */
-function notify(alert: Alert) {
-  if (!("Notification" in window) || Notification.permission !== "granted") return;
-  new Notification("Usage Watcher", { body: alert.message });
+// Threshold crossings arrive as their own event, so the widget never has to
+// diff snapshots to notice one.
+function onAlert(alert: Alert) {
+  void notify("Usage Watcher", alert.message);
 }
 
-const { snapshot, connection, everConnected } = useDaemon(notify);
+const { snapshot, connection, everConnected } = useDaemon(onAlert);
 
 const providers = computed(() => snapshot.value?.providers ?? []);
 const headline = computed(() => mostConstrained(providers.value));
 
-function askForNotifications() {
-  if ("Notification" in window && Notification.permission === "default") {
-    void Notification.requestPermission();
-  }
-}
 </script>
 
 <template>
-  <main @click="askForNotifications">
+  <main @click="requestBrowserPermission">
     <header class="bar">
       <span class="dot" :class="connection" :title="`daemon ${connection}`" />
       <strong v-if="headline">

@@ -80,20 +80,92 @@ or critical, not one per poll for the next four hours.
 
 ## Building the widget
 
-The Vue app runs anywhere Node does. The Tauri shell needs the platform webview
-toolchain, which a WSL checkout usually lacks, so `widget/src-tauri` is
-deliberately **not** a member of the Cargo workspace: `cargo test` at the repo
-root stays green without it.
+The Vue app runs anywhere Node does — that is what `npm --prefix widget run dev`
+gives you, and it is enough to see live data in a browser.
 
-- **On Windows/macOS** — install Rust and Node natively, then
-  `npm --prefix widget run app:dev`. Point it at the WSL daemon via
-  `VITE_UWD_URL`; WSL2 forwards `localhost` by default, so the default usually
-  just works.
-- **Inside WSL** — needs `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`,
-  `librsvg2-dev`, `libxdo-dev` and `pkg-config` first.
+The **Tauri shell** (tray icon, frameless always-on-top panel, native
+notifications) needs the platform webview toolchain, which a WSL checkout
+usually lacks. `widget/src-tauri` is therefore deliberately **not** a member of
+the Cargo workspace, so `cargo test` at the repo root stays green without it.
 
-`npm --prefix widget run tauri icon` replaces the placeholder icon with a real
-platform set.
+### On Windows (the intended target)
+
+The daemon stays in WSL — it is where the credentials and vendor CLIs live. Only
+the widget is built natively.
+
+1. **Toolchain**, once:
+   - [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+     with the *Desktop development with C++* workload — Rust's MSVC target needs
+     the linker.
+   - [rustup](https://win.rustup.rs) (defaults are right: `stable-msvc`).
+   - [Node LTS](https://nodejs.org).
+   - WebView2 runtime — already present on Windows 11 and updated Windows 10.
+
+2. **Get the source onto a Windows drive.** Building across `\\wsl.localhost`
+   works but is slow enough to be unpleasant, because every file read crosses
+   the 9p filesystem:
+
+   ```powershell
+   git clone \\wsl.localhost\Ubuntu\home\xiaodong\work\usage-watcher C:\dev\usage-watcher
+   ```
+
+   That clone is a normal git remote, so `git pull` there picks up commits made
+   on the WSL side.
+
+3. **Run it** — daemon in WSL, widget on Windows:
+
+   ```sh
+   cargo run -p uwd          # in WSL
+   ```
+   ```powershell
+   cd C:\dev\usage-watcher\widget
+   npm install
+   npm run app:dev
+   ```
+
+   No `VITE_UWD_URL` needed: WSL2 forwards `localhost`, so a daemon bound to
+   `127.0.0.1:7878` inside WSL answers on `localhost:7878` from Windows.
+
+4. **Replace the placeholder icon** when you have a real one:
+
+   ```powershell
+   npm run tauri icon path\to\icon.png
+   ```
+
+#### If localhost forwarding is not working
+
+It occasionally breaks after a Windows update or a VPN change. Symptom: the
+panel says *Cannot reach uwd* while `curl` inside WSL is fine. Then bind the
+daemon to the WSL interface instead — which it will not do unauthenticated:
+
+```toml
+[daemon]
+bind = "0.0.0.0:7878"
+token = "pick-something-long"
+```
+
+and on the Windows side set `widget/.env.local`:
+
+```
+VITE_UWD_URL=http://<wsl-ip>:7878
+VITE_UWD_TOKEN=pick-something-long
+```
+
+`<wsl-ip>` is what `hostname -I` prints inside WSL. It changes on every WSL
+restart, which is the main reason to prefer localhost forwarding. You must also
+add that origin to `connect-src` in `widget/src-tauri/tauri.conf.json` — the
+webview's CSP names the daemons it may talk to, and an unlisted one is blocked
+before a request is sent.
+
+### Inside WSL
+
+Possible, but the tray behaviour under WSLg is not representative of a real
+desktop. Needs, first:
+
+```sh
+sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+                 librsvg2-dev libxdo-dev pkg-config build-essential
+```
 
 ## Types
 
