@@ -7,15 +7,19 @@ import { ago } from "../lib/format";
 const props = defineProps<{ provider: Provider; now: number }>();
 
 const stale = computed(() => props.provider.status.state === "stale");
-const failed = computed(
-  () => props.provider.status.state === "error" || props.provider.status.state === "unavailable",
-);
-
-/** `state` is the serde tag, so narrowing on it gives us the payload field. */
+/**
+ * `state` is the serde tag, so narrowing on it gives us the payload field.
+ *
+ * Both suppress the meters, but they are not the same news and must not look
+ * the same: an error is something you can fix, while "unavailable" means this
+ * provider structurally has nothing to report — opencode Zen publishes no usage
+ * API, an OpenRouter free key has no balance. Those are permanent, and a
+ * permanently red tile is a tile you stop reading.
+ */
 const problem = computed(() => {
   const s = props.provider.status;
-  if (s.state === "error") return s.message;
-  if (s.state === "unavailable") return s.reason;
+  if (s.state === "error") return { text: s.message, kind: "problem" };
+  if (s.state === "unavailable") return { text: s.reason, kind: "note" };
   return null;
 });
 
@@ -45,7 +49,7 @@ const authBadge = computed(() => {
       <span v-if="authBadge" class="badge" :title="authBadge.title">{{ authBadge.text }}</span>
     </header>
 
-    <p v-if="failed" class="problem">{{ problem }}</p>
+    <p v-if="problem" :class="problem.kind">{{ problem.text }}</p>
 
     <template v-else>
       <MeterRow
@@ -107,12 +111,20 @@ h2 {
   cursor: help;
 }
 
-.problem {
+.problem,
+.note {
   margin: 0.2rem 0 0;
   font-size: 0.7rem;
-  color: var(--crit);
   /* Adapter errors are sentences, not codes — let them wrap and be read. */
   line-height: 1.35;
+}
+
+.problem {
+  color: var(--crit);
+}
+
+.note {
+  color: var(--fg-dim);
 }
 
 .stale-note {

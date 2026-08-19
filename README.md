@@ -1,7 +1,7 @@
 # usage-watcher
 
-One place to see how much headroom is left across Claude Code, OpenAI Codex, and
-(later) opencode and OpenRouter.
+One place to see how much headroom is left across Claude Code, OpenAI Codex,
+opencode and OpenRouter.
 
 Three pieces:
 
@@ -21,12 +21,46 @@ vendor CLIs stay inside WSL.
 cargo install --path crates/uw-cli     # the `uw` command
 uw auth login claude                   # own OAuth grant, refreshed by us
 uw auth login codex                    # needs port 1455 free — no `codex login` running
+uw auth login openrouter               # browser consent, mints a key for us
 uw                                     # one-shot read
 
 cargo run -p uwd                       # daemon on http://127.0.0.1:7878
 npm --prefix widget install
 npm --prefix widget run dev            # panel at http://localhost:5173
 ```
+
+opencode needs no login: it keeps a static API key on disk and the default
+`delegated` mode reads it.
+
+## Providers
+
+| | what it reports | how to authenticate |
+|---|---|---|
+| **Claude Code** | 5-hour, 7-day and per-model weekly windows | `login` (own grant), `delegated`, or `claude setup-token` |
+| **OpenAI Codex** | its rate-limit windows, plus credits when the plan has them | `login` (own grant) or `delegated` |
+| **OpenRouter** | credit balance, per-key spend cap, spend this month | `login` (own grant) or a key from the dashboard |
+| **opencode** | rolling, weekly and monthly windows on the **Go** plan | `delegated` (reads the CLI's key) or `uw auth token` |
+
+Two of these behave differently from the other two, and it is worth knowing why
+before reading a tile:
+
+- **OpenRouter has no vendor CLI**, so `delegated` is meaningless and the default
+  is its own grant. Its PKCE flow exists precisely so a third-party app can mint
+  a key on your behalf; what comes back is a durable API key with no expiry and
+  no refresh token, which makes it the easiest credential here to carry to a
+  phone. A free-tier key has no balance and no cap, so the tile says there is
+  nothing to measure rather than showing an empty bar.
+- **opencode only reports usage on the Go subscription.** `GET /zen/go/v1/usage`
+  is undocumented — it was added in response to a request for exactly this, and
+  the adapter is written against the console's own source — so treat it as
+  liable to move. Zen proper is pay-as-you-go and publishes no usage or balance
+  API at all; a Zen key therefore gets an honest "nothing to report" tile, not a
+  red error. If the shape does change, the adapter fails loudly rather than
+  quietly rendering a healthy tile with no rows.
+
+Adding a provider means one file in `crates/uw-core/src/providers/` and one arm
+in the `Any` enum beside it. Everything downstream — the CLI table, the panel,
+alerting, the schedule — is driven off that registry and needs no edit.
 
 ## Running it in WSL
 
@@ -90,15 +124,28 @@ Set per provider with `uw auth mode <provider> <mode>`:
 
 - **`own`** — our own OAuth grant and our own refresh token. The only mode that
   works where the vendor CLI does not exist, which is what a phone needs.
-- **`delegated`** (default) — read the vendor CLI's credential, strictly
-  read-only. Both vendors rotate refresh tokens, so refreshing a borrowed one
-  would sign you out of your real CLI; the code drops the refresh token on read
-  and a test keeps it that way. An expired borrowed token shows as an error
-  telling you to run the vendor CLI, never as a silent refresh.
-- **`token`** — a long-lived token pasted in by hand.
+- **`delegated`** — read the vendor CLI's credential, strictly read-only. Claude
+  and Codex both rotate refresh tokens, so refreshing a borrowed one would sign
+  you out of your real CLI; the code drops the refresh token on read and a test
+  keeps it that way. An expired borrowed token shows as an error telling you to
+  run the vendor CLI, never as a silent refresh. opencode is the exception —
+  its credential is a static key, so there is nothing to rotate and nothing to
+  break.
+- **`token`** — a long-lived token or API key pasted in by hand.
 
-`uw auth adopt <provider>` copies the CLI's grant into our store as a one-off.
-Re-run the vendor login afterwards so the two stop sharing a refresh token.
+The default is `delegated` for anything with a vendor CLI to borrow from, and
+the adapter's own choice otherwise — OpenRouter defaults to `own` because it has
+no CLI, so the borrow would only ever produce an error tile.
+
+`uw auth adopt <provider>` copies the vendor CLI's stored credential into our
+own store, so the watcher keeps working where that CLI is not installed. What
+that means depends on the provider, and `adopt` says which it did:
+
+- Claude and Codex hand over a **rotating** OAuth grant. We then own and refresh
+  it, and you must re-run the vendor login or whichever of you refreshes first
+  signs the other out.
+- opencode hands over a **static** API key. That is a copy, not a transfer —
+  nothing rotates and the opencode CLI is unaffected.
 
 Credentials go to the OS keychain on macOS and Windows, and to an owner-only
 `0600` file on Linux — WSL runs no Secret Service daemon, so `keyring` is not a
@@ -120,6 +167,32 @@ auth = "own"
 enabled = true
 # interval_active = 60    # seconds; floored at 30 so the watcher never becomes
 # interval_idle = 300     # a meaningful share of your own quota
+
+[providers.opencode]
+auth = "delegated"        # reads the key `opencode auth login` stored
+
+[providers.openrouter]
+enabled = false           # drop a provider you do not use, rather than
+                          # leaving a permanent "not signed in" tile
+```
+
+Every provider is enabled by default, so an account you have not set up shows as
+an error tile until you either sign in or switch it off.
+
+Claude's usage endpoint is rate limited more tightly than the others, and a 429
+there is normal rather than alarming. The daemon absorbs it: the first two
+consecutive failures keep the last reading and merely dim it, and only a
+sustained outage drops the numbers. A one-shot `uw` has nothing to fall back on,
+so it prints the 429 — most often because `uwd` is already polling and the two
+asked within a second of each other.
+
+If Claude spends more time dimmed than not, raise its poll interval rather than
+living with it. The 5-hour window moves about a third of a percent per minute,
+so nothing is lost:
+
+```toml
+[providers.claude]
+interval_active = 180
 ```
 
 ## API

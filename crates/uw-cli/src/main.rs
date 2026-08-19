@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use uw_core::auth::TokenSource;
 use uw_core::model::{AuthKind, MeterKind, Provider, Severity, Status};
-use uw_core::providers::{claude::Claude, codex::Codex, Adapter, AuthPreference};
+use uw_core::providers::{Any, AuthPreference};
 use uw_core::Config;
 
 #[derive(Parser)]
@@ -34,21 +34,22 @@ enum Command {
 enum AuthCommand {
     /// Sign in to a provider with its own OAuth grant.
     Login { provider: String },
-    /// Take over the vendor CLI's current grant as our own.
+    /// Take over the vendor CLI's stored credential as our own.
     ///
-    /// Copies the CLI's refresh token into our store so we can rotate it
-    /// ourselves. The authorize step is gated by bot attestation we cannot (and
-    /// should not) synthesize, but the token endpoint is plain OAuth — so an
-    /// already-issued refresh token is all we need, and it works anywhere,
-    /// Android included.
+    /// For Claude and Codex this copies the CLI's refresh token so we can rotate
+    /// it ourselves, and you must re-run the vendor login afterwards or the two
+    /// will fight over one rotating token. For opencode it copies a static API
+    /// key, which is only a copy — the CLI is unaffected.
     ///
-    /// Re-run the vendor login afterwards so the CLI gets its own fresh grant.
+    /// Either way the result works where the vendor CLI does not exist, which
+    /// is what a phone needs.
     Adopt { provider: String },
     /// Store a long-lived token pasted in by hand.
     ///
     /// For Claude, run `claude setup-token` and paste what it prints — a
     /// one-year OAuth token, and the path Anthropic documents for environments
-    /// without an interactive browser.
+    /// without an interactive browser. For opencode and OpenRouter this is just
+    /// an API key from the provider's web console.
     Token { provider: String },
     /// Forget a provider's stored credential.
     Logout { provider: String },
@@ -68,7 +69,7 @@ enum ModeArg {
     Delegated,
     /// Our own OAuth grant. Works without the vendor CLI (e.g. on Android).
     Own,
-    /// A long-lived token pasted in by hand (`claude setup-token`).
+    /// A long-lived token or API key pasted in by hand.
     Token,
 }
 
@@ -124,14 +125,16 @@ async fn auth(command: AuthCommand) -> Result<()> {
         }
         AuthCommand::Status => {
             let cfg = Config::load()?;
-            for (id, label) in [("claude", "Claude Code"), ("codex", "OpenAI Codex")] {
-                let pref = cfg.auth_pref(id);
+            // Driven off the registry so a new adapter shows up here without
+            // anyone remembering to add it.
+            for adapter in Any::all() {
+                let pref = adapter.auth_pref(&cfg);
                 let mode = match pref {
                     AuthPreference::Own => "own grant",
                     AuthPreference::Delegated => "delegated (borrows the CLI)",
                     AuthPreference::Token => "long-lived token",
                 };
-                let state = match source_for(id, &cfg) {
+                let state = match adapter.token_source(pref) {
                     Ok(s) => match s.access_token().await {
                         Ok(c) if c.is_expired() => "expired".to_string(),
                         Ok(_) => "ok".to_string(),
@@ -139,13 +142,20 @@ async fn auth(command: AuthCommand) -> Result<()> {
                     },
                     Err(e) => format!("{e:#}"),
                 };
-                println!("{label:<16} {mode:<28} {state}");
+                println!("{:<16} {mode:<28} {state}", adapter.label());
             }
             Ok(())
         }
         AuthCommand::Mode { provider, mode } => {
-            let mut cfg = Config::load()?;
+            let adapter = adapter_for(&provider)?;
             let pref: AuthPreference = mode.into();
+
+            // Checked before the write, not after. A mode this provider cannot
+            // support would otherwise be saved and only surface later, as an
+            // error tile in the panel with no hint of which command caused it.
+            adapter.token_source(pref)?;
+
+            let mut cfg = Config::load()?;
             cfg.set_auth_pref(&provider, pref);
             cfg.save()?;
             println!(
@@ -165,17 +175,22 @@ async fn auth(command: AuthCommand) -> Result<()> {
 }
 
 async fn login(provider: &str) -> Result<()> {
+    let adapter = adapter_for(provider)?;
     let mut cfg = Config::load()?;
+
+    // A provider with no OAuth flow at all must say so before we start
+    // rewriting config on its behalf.
+    adapter.token_source(AuthPreference::Own)?;
 
     // Logging in only makes sense for an own grant, so flip the toggle rather
     // than failing with "this provider is in delegated mode".
-    if cfg.auth_pref(provider) != AuthPreference::Own {
+    if adapter.auth_pref(&cfg) != AuthPreference::Own {
         cfg.set_auth_pref(provider, AuthPreference::Own);
         cfg.save()?;
         println!("Switched {provider} to its own OAuth grant.\n");
     }
 
-    let source = source_for(provider, &cfg)?;
+    let source = adapter.token_source(AuthPreference::Own)?;
     let mut cred = source.login(&TerminalLogin).await?;
 
     // Best effort: this only decorates the tile with a plan name, and the
@@ -192,39 +207,49 @@ async fn login(provider: &str) -> Result<()> {
 
 async fn adopt(provider: &str) -> Result<()> {
     use uw_core::auth::TokenStore;
-    use uw_core::providers::{claude, codex};
 
-    let (path, cred) = match provider {
-        "claude" => {
-            let p = Claude
-                .delegated_path()
-                .context("cannot locate the Claude credentials file")?;
-            (p.clone(), claude::read_full_credential(&p)?)
-        }
-        "codex" => {
-            let p = Codex
-                .delegated_path()
-                .context("cannot locate the Codex auth file")?;
-            (p.clone(), codex::read_full_credential(&p)?)
-        }
-        other => bail!("unknown provider `{other}` (known: claude, codex)"),
+    let adapter = adapter_for(provider)?;
+    let Some(target) = adapter.adopt_as() else {
+        bail!(
+            "`{provider}` has no vendor CLI credential to adopt — run \
+             `uw auth login {provider}` instead"
+        );
     };
 
-    TokenStore::save(provider, &cred)?;
+    let (path, cred) = adapter.read_full_credential()?;
+
+    // An adopted OAuth grant becomes ours and gets refreshed; an adopted API
+    // key is only a copy, and lives under the pasted-token entry so the two
+    // never fight over one slot.
+    let entry = match target {
+        AuthPreference::Token => format!("{provider}-token"),
+        _ => provider.to_string(),
+    };
+    TokenStore::save(&entry, &cred)?;
 
     let mut cfg = Config::load()?;
-    cfg.set_auth_pref(provider, AuthPreference::Own);
+    cfg.set_auth_pref(provider, target);
     cfg.save()?;
 
-    println!("Adopted the grant from {}.", path.display());
-    println!("{provider} now refreshes that token independently.\n");
-    println!("IMPORTANT: run the vendor login again now, so the CLI gets a grant of");
-    println!("its own and the two stop sharing one refresh token:\n");
-    println!(
-        "  {}\n",
-        if provider == "claude" { "claude auth login" } else { "codex login" }
-    );
-    println!("Then run `uw` to confirm the adopted token still works.");
+    println!("Adopted the credential from {}.", path.display());
+
+    match adapter.relogin_hint() {
+        // Claude and Codex rotate refresh tokens: until the vendor CLI gets a
+        // grant of its own, whichever of us refreshes first signs the other out.
+        Some(cmd) => {
+            println!("{provider} now refreshes that token independently.\n");
+            println!("IMPORTANT: run the vendor login again now, so the CLI gets a grant of");
+            println!("its own and the two stop sharing one refresh token:\n");
+            println!("  {cmd}\n");
+        }
+        // A static API key. Copying it changes nothing for the vendor CLI, and
+        // telling the user to sign in again would be busywork.
+        None => println!(
+            "That is a static API key, so the opencode CLI is unaffected — nothing \
+             to sign in to again.\n"
+        ),
+    }
+    println!("Run `uw` to confirm the adopted credential still works.");
     Ok(())
 }
 
@@ -232,8 +257,14 @@ async fn store_token(provider: &str) -> Result<()> {
     use std::io::Write;
     use uw_core::auth::{Credential, TokenStore};
 
-    if provider == "claude" {
-        println!("Run `claude setup-token` in another terminal, then paste the token here.");
+    adapter_for(provider)?;
+    match provider {
+        "claude" => {
+            println!("Run `claude setup-token` in another terminal, then paste the token here.")
+        }
+        "openrouter" => println!("Create a key at https://openrouter.ai/settings/keys."),
+        "opencode" => println!("Copy your key from https://opencode.ai/zen."),
+        _ => {}
     }
     print!("Token: ");
     std::io::stdout().flush()?;
@@ -306,13 +337,18 @@ impl uw_core::auth::LoginUi for TerminalLogin {
     }
 }
 
+fn adapter_for(provider: &str) -> Result<Any> {
+    Any::by_id(provider).with_context(|| {
+        format!(
+            "unknown provider `{provider}` (known: {})",
+            Any::known_ids()
+        )
+    })
+}
+
 fn source_for(provider: &str, cfg: &Config) -> Result<TokenSource> {
-    let pref = cfg.auth_pref(provider);
-    match provider {
-        "claude" => Claude.token_source(pref),
-        "codex" => Codex.token_source(pref),
-        other => bail!("unknown provider `{other}` (known: claude, codex)"),
-    }
+    let adapter = adapter_for(provider)?;
+    adapter.token_source(adapter.auth_pref(cfg))
 }
 
 fn print_table(providers: &[Provider]) {

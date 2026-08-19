@@ -11,7 +11,7 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 use super::Adapter;
-use crate::auth::{Credential, OAuthConfig, RedirectMode, TokenBody};
+use crate::auth::{Credential, Flow, OAuthConfig, RedirectMode, TokenBody};
 use crate::model::{AuthKind, Meter, MeterKind, Provider, Severity, Status};
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
@@ -76,8 +76,9 @@ impl Adapter for Claude {
         "Claude Code"
     }
 
-    fn oauth_config(&self) -> OAuthConfig {
-        OAuthConfig {
+    fn oauth_config(&self) -> Result<OAuthConfig> {
+        Ok(OAuthConfig {
+            flow: Flow::Oauth2,
             authorize_url: AUTHORIZE_URL.into(),
             token_url: TOKEN_URL.into(),
             client_id: CLIENT_ID.into(),
@@ -99,7 +100,7 @@ impl Adapter for Claude {
             // The CLI narrows the scope set on refresh: `org:create_api_key`
             // is an authorize-time concern only.
             refresh_scopes: REFRESH_SCOPES.iter().map(|s| s.to_string()).collect(),
-        }
+        })
     }
 
     fn delegated_path(&self) -> Option<PathBuf> {
@@ -438,7 +439,7 @@ mod cli_parity {
     /// optional appends; it omits all three on a plain login, so we do too.
     #[test]
     fn authorize_url_matches_claude_codes_own_builder() {
-        let url = OAuthClient::new(Claude.oauth_config())
+        let url = OAuthClient::new(Claude.oauth_config().unwrap())
             .authorize_url("http://localhost:38569/callback", "CHALLENGE", "STATE")
             .unwrap();
 
@@ -460,7 +461,7 @@ mod cli_parity {
     /// The refresh grant deliberately asks for less than the authorize grant.
     #[test]
     fn refresh_drops_the_api_key_scope() {
-        let cfg = Claude.oauth_config();
+        let cfg = Claude.oauth_config().unwrap();
         assert!(cfg.scopes.contains(&"org:create_api_key".to_string()));
         assert!(!cfg.refresh_scopes.contains(&"org:create_api_key".to_string()));
         assert_eq!(cfg.refresh_scopes.len(), 5);

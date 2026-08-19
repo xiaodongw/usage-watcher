@@ -65,7 +65,12 @@ impl Loopback {
     ///
     /// `expected_state` is compared in full; a mismatch aborts rather than
     /// proceeding, since that is the signature of a cross-site login attempt.
-    pub async fn wait(self, expected_state: &str, timeout: Duration) -> Result<Callback> {
+    ///
+    /// `None` means the flow defines no `state` at all — OpenRouter's does not,
+    /// because the code it returns is inert without the PKCE verifier that only
+    /// this process holds, and the listener is ephemeral and bound to loopback.
+    /// A stray `state` on such a redirect is ignored rather than trusted.
+    pub async fn wait(self, expected_state: Option<&str>, timeout: Duration) -> Result<Callback> {
         let accept = async {
             loop {
                 let (mut sock, _) = self.listener.accept().await?;
@@ -96,28 +101,35 @@ impl Loopback {
                     bail!("provider rejected the authorization: {err} — {desc}");
                 }
 
-                match (params.get("code"), params.get("state")) {
-                    (Some(code), Some(state)) if state == expected_state => {
-                        respond(
-                            &mut sock,
-                            200,
-                            "Signed in. You can close this tab and return to your terminal.",
-                        )
-                        .await;
-                        return Ok(Callback { code: code.clone() });
-                    }
-                    (Some(_), Some(_)) => {
-                        respond(&mut sock, 400, "State mismatch — login rejected.").await;
-                        bail!(
-                            "OAuth state mismatch: the redirect did not come from the \
-                             request we started. Login aborted."
-                        );
-                    }
-                    _ => {
-                        respond(&mut sock, 400, "Redirect was missing code or state.").await;
-                        bail!("redirect carried neither an error nor a usable code/state pair");
+                let Some(code) = params.get("code") else {
+                    respond(&mut sock, 400, "Redirect was missing the code.").await;
+                    bail!("redirect carried neither an error nor a usable code");
+                };
+
+                if let Some(expected) = expected_state {
+                    match params.get("state") {
+                        Some(state) if state == expected => {}
+                        Some(_) => {
+                            respond(&mut sock, 400, "State mismatch — login rejected.").await;
+                            bail!(
+                                "OAuth state mismatch: the redirect did not come from the \
+                                 request we started. Login aborted."
+                            );
+                        }
+                        None => {
+                            respond(&mut sock, 400, "Redirect was missing the state.").await;
+                            bail!("redirect omitted the `state` this flow requires");
+                        }
                     }
                 }
+
+                respond(
+                    &mut sock,
+                    200,
+                    "Signed in. You can close this tab and return to your terminal.",
+                )
+                .await;
+                return Ok(Callback { code: code.clone() });
             }
         };
 

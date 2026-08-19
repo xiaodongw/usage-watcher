@@ -13,7 +13,7 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 use super::Adapter;
-use crate::auth::{Credential, OAuthConfig, RedirectMode, TokenBody};
+use crate::auth::{Credential, Flow, OAuthConfig, RedirectMode, TokenBody};
 use crate::model::{AuthKind, Meter, Provider, Status};
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
@@ -36,8 +36,9 @@ impl Adapter for Codex {
         "OpenAI Codex"
     }
 
-    fn oauth_config(&self) -> OAuthConfig {
-        OAuthConfig {
+    fn oauth_config(&self) -> Result<OAuthConfig> {
+        Ok(OAuthConfig {
+            flow: Flow::Oauth2,
             authorize_url: AUTHORIZE_URL.into(),
             token_url: TOKEN_URL.into(),
             client_id: CLIENT_ID.into(),
@@ -61,7 +62,7 @@ impl Adapter for Codex {
             token_body: TokenBody::Form,
             exchange_echoes_state: false,
             refresh_scopes: Vec::new(),
-        }
+        })
     }
 
     fn delegated_path(&self) -> Option<PathBuf> {

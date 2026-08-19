@@ -6,12 +6,15 @@
 
 pub mod claude;
 pub mod codex;
+pub mod opencode;
+pub mod openrouter;
 
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
 use crate::auth::{AuthMode, Credential, TokenSource};
 use crate::model::Provider;
+use crate::Config;
 
 /// Which auth mechanism a provider should use, from config.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
@@ -35,7 +38,20 @@ pub trait Adapter: Send + Sync {
     fn label(&self) -> &'static str;
 
     /// OAuth parameters for [`AuthPreference::Own`].
-    fn oauth_config(&self) -> crate::auth::OAuthConfig;
+    ///
+    /// Fallible because not every provider has one: opencode mints its keys in
+    /// a web console, and the error is where the user is told what to do
+    /// instead of logging in.
+    fn oauth_config(&self) -> Result<crate::auth::OAuthConfig>;
+
+    /// What this provider uses when config says nothing.
+    ///
+    /// Delegated suits anything with a vendor CLI to borrow from, which is why
+    /// it is the global default; a provider with no CLI overrides it rather
+    /// than showing an error tile out of the box.
+    fn default_auth(&self) -> AuthPreference {
+        AuthPreference::Delegated
+    }
 
     /// Where the vendor CLI keeps its credential.
     fn delegated_path(&self) -> Option<PathBuf>;
@@ -65,7 +81,7 @@ pub trait Adapter: Send + Sync {
 
     fn auth_mode(&self, pref: AuthPreference) -> Result<AuthMode> {
         match pref {
-            AuthPreference::Own => Ok(AuthMode::OwnGrant(self.oauth_config())),
+            AuthPreference::Own => Ok(AuthMode::OwnGrant(self.oauth_config()?)),
             // Stored under a distinct key so a pasted token and an OAuth grant
             // can coexist and you can switch between them without re-entering
             // either one.
@@ -97,40 +113,57 @@ pub trait Adapter: Send + Sync {
 pub enum Any {
     Claude(claude::Claude),
     Codex(codex::Codex),
+    OpenRouter(openrouter::OpenRouter),
+    Opencode(opencode::Opencode),
+}
+
+/// The one place the arms are enumerated. Every forwarding method below is the
+/// same shape, and writing them out four times each was how the third provider
+/// ended up missing from two of them.
+macro_rules! dispatch {
+    ($self:expr, |$a:ident| $body:expr) => {
+        match $self {
+            Any::Claude($a) => $body,
+            Any::Codex($a) => $body,
+            Any::Opencode($a) => $body,
+            Any::OpenRouter($a) => $body,
+        }
+    };
 }
 
 impl Any {
     /// Every provider that exists, in display order.
+    ///
+    /// This is what `uw` prints. The daemon keys its snapshot by id instead, so
+    /// tiles hold still between polls — and the two agree because this order is
+    /// alphabetical by id as well.
     pub fn all() -> Vec<Any> {
-        vec![Any::Claude(claude::Claude), Any::Codex(codex::Codex)]
+        vec![
+            Any::Claude(claude::Claude),
+            Any::Codex(codex::Codex),
+            Any::Opencode(opencode::Opencode),
+            Any::OpenRouter(openrouter::OpenRouter),
+        ]
     }
 
     pub fn id(&self) -> &'static str {
-        match self {
-            Any::Claude(a) => a.id(),
-            Any::Codex(a) => a.id(),
-        }
+        dispatch!(self, |a| a.id())
     }
 
     pub fn label(&self) -> &'static str {
-        match self {
-            Any::Claude(a) => a.label(),
-            Any::Codex(a) => a.label(),
-        }
+        dispatch!(self, |a| a.label())
     }
 
     pub fn delegated_path(&self) -> Option<PathBuf> {
-        match self {
-            Any::Claude(a) => a.delegated_path(),
-            Any::Codex(a) => a.delegated_path(),
-        }
+        dispatch!(self, |a| a.delegated_path())
+    }
+
+    pub fn default_auth(&self) -> AuthPreference {
+        dispatch!(self, |a| a.default_auth())
     }
 
     pub fn token_source(&self, pref: AuthPreference) -> Result<TokenSource> {
-        match self {
-            Any::Claude(a) => a.token_source(pref),
-            Any::Codex(a) => a.token_source(pref),
-        }
+        dispatch!(self, |a| a.token_source(pref))
     }
 
     pub async fn fetch(
@@ -142,7 +175,27 @@ impl Any {
         match self {
             Any::Claude(a) => a.fetch(http, cred, kind).await,
             Any::Codex(a) => a.fetch(http, cred, kind).await,
+            Any::OpenRouter(a) => a.fetch(http, cred, kind).await,
+            Any::Opencode(a) => a.fetch(http, cred, kind).await,
         }
+    }
+
+    pub async fn enrich(&self, http: &reqwest::Client, cred: &mut Credential) -> Result<()> {
+        match self {
+            Any::Claude(a) => a.enrich(http, cred).await,
+            Any::Codex(a) => a.enrich(http, cred).await,
+            Any::OpenRouter(a) => a.enrich(http, cred).await,
+            Any::Opencode(a) => a.enrich(http, cred).await,
+        }
+    }
+
+    /// The auth mode to use for this provider: whatever config says, or the
+    /// adapter's own default. Reading it here rather than from [`crate::Config`]
+    /// keeps callers from having to know which default belongs to which
+    /// provider — get that wrong and a provider silently stops reporting.
+    pub fn auth_pref(&self, cfg: &Config) -> AuthPreference {
+        cfg.configured_auth(self.id())
+            .unwrap_or_else(|| self.default_auth())
     }
 
     /// Default poll intervals in seconds, `(active, idle)`, before config
@@ -151,17 +204,72 @@ impl Any {
     /// "Active" means the provider is currently consuming something. Claude's
     /// 5-hour window moves fast enough to be worth a minute; Codex only
     /// publishes a 7-day bucket, so polling it that often would tell us
-    /// nothing new.
+    /// nothing new. OpenRouter is slowest of all: a prepaid balance only moves
+    /// when you spend, and the account wallet is not a per-request counter.
     pub fn poll_intervals(&self) -> (u64, u64) {
         match self {
             Any::Claude(_) => (60, 300),
             Any::Codex(_) => (120, 600),
+            Any::Opencode(_) => (120, 600),
+            Any::OpenRouter(_) => (300, 900),
         }
+    }
+
+    /// What `uw auth adopt` should leave the provider set to, or `None` where
+    /// there is no vendor credential to adopt.
+    ///
+    /// The two answers are not the same thing. Claude and Codex hand over a
+    /// rotating OAuth grant, which we then own and refresh — that is
+    /// [`AuthPreference::Own`], and it obliges the user to re-run the vendor
+    /// login. opencode hands over a static API key, which is a copy, not a
+    /// transfer: nothing rotates and the CLI is unaffected.
+    pub fn adopt_as(&self) -> Option<AuthPreference> {
+        match self {
+            Any::Claude(_) | Any::Codex(_) => Some(AuthPreference::Own),
+            Any::Opencode(_) => Some(AuthPreference::Token),
+            Any::OpenRouter(_) => None,
+        }
+    }
+
+    /// The vendor command to re-run after an adopt, for providers where our
+    /// copy and theirs would otherwise share one rotating refresh token.
+    pub fn relogin_hint(&self) -> Option<&'static str> {
+        match self {
+            Any::Claude(_) => Some("claude auth login"),
+            Any::Codex(_) => Some("codex login"),
+            // Static keys. Copying one changes nothing for the CLI.
+            Any::Opencode(_) | Any::OpenRouter(_) => None,
+        }
+    }
+
+    /// Read the vendor credential *including* anything [`read_delegated`]
+    /// deliberately withholds, for `uw auth adopt`. See the note on
+    /// [`claude::read_full_credential`].
+    pub fn read_full_credential(&self) -> Result<(PathBuf, Credential)> {
+        let Some(path) = self.delegated_path() else {
+            bail!("`{}` has no vendor credential file to adopt", self.id());
+        };
+        let cred = match self {
+            Any::Claude(_) => claude::read_full_credential(&path)?,
+            Any::Codex(_) => codex::read_full_credential(&path)?,
+            Any::Opencode(_) => opencode::read_full_credential(&path)?,
+            Any::OpenRouter(_) => bail!("`openrouter` has no vendor credential to adopt"),
+        };
+        Ok((path, cred))
     }
 
     /// `None` for an id we do not have an adapter for.
     pub fn by_id(id: &str) -> Option<Any> {
         Any::all().into_iter().find(|a| a.id() == id)
+    }
+
+    /// Every provider id, for CLI help and error messages.
+    pub fn known_ids() -> String {
+        Any::all()
+            .iter()
+            .map(|a| a.id())
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -173,6 +281,7 @@ pub fn read_delegated(provider: &str, path: &Path) -> Result<Credential> {
     match provider {
         "claude" => claude::read_delegated(path),
         "codex" => codex::read_delegated(path),
+        "opencode" => opencode::read_delegated(path),
         other => bail!("`{other}` does not support delegated auth"),
     }
 }
@@ -181,8 +290,7 @@ pub fn read_delegated(provider: &str, path: &Path) -> Result<Credential> {
 /// the same reason [`read_delegated`] does: callers hold a string, not a type.
 pub async fn enrich(provider: &str, http: &reqwest::Client, cred: &mut Credential) -> Result<()> {
     match Any::by_id(provider) {
-        Some(Any::Claude(a)) => a.enrich(http, cred).await,
-        Some(Any::Codex(a)) => a.enrich(http, cred).await,
+        Some(a) => a.enrich(http, cred).await,
         None => Ok(()),
     }
 }

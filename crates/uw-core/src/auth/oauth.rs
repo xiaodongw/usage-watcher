@@ -48,9 +48,28 @@ pub enum TokenBody {
     Json,
 }
 
+/// Which shape of PKCE flow the provider implements.
+///
+/// Both shapes are "browser, PKCE, code back to a loopback port". They diverge
+/// in what the authorize page expects and in what the exchange hands back, and
+/// the divergence is wide enough that pretending otherwise would mean four more
+/// booleans on [`OAuthConfig`] and a reader who cannot tell which combinations
+/// are real.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flow {
+    /// RFC 6749 authorization-code + PKCE. Claude and Codex.
+    Oauth2,
+    /// OpenRouter's key exchange. The authorize page takes `callback_url` plus
+    /// the PKCE challenge and nothing else — no client registration, no scopes,
+    /// no `state` — and the exchange mints a durable API key rather than a
+    /// token pair, so there is never anything to refresh.
+    OpenRouterKey,
+}
+
 /// Everything that differs between providers.
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {
+    pub flow: Flow,
     pub authorize_url: String,
     pub token_url: String,
     pub client_id: String,
@@ -152,18 +171,23 @@ impl OAuthClient {
 
                 let wait = Duration::from_secs(300);
                 let paste = if *allow_paste { ui.paste_channel() } else { None };
+                // `None` for flows that define no `state`; see `Loopback::wait`.
+                let expect = match self.cfg.flow {
+                    Flow::Oauth2 => Some(state.as_str()),
+                    Flow::OpenRouterKey => None,
+                };
 
                 let code = match paste {
                     None => {
                         loopback
-                            .wait(&state, wait)
+                            .wait(expect, wait)
                             .await
                             .context("the browser never completed the redirect")?
                             .code
                     }
                     // Whichever return path the browser took, take it.
                     Some(rx) => tokio::select! {
-                        r = loopback.wait(&state, wait) => {
+                        r = loopback.wait(expect, wait) => {
                             r.context("the browser never completed the redirect")?.code
                         }
                         p = rx => {
@@ -215,20 +239,33 @@ impl OAuthClient {
         let mut url = url::Url::parse(&self.cfg.authorize_url)?;
         {
             let mut q = url.query_pairs_mut();
-            // Order mirrors what the Claude Code CLI emits byte-for-byte. It
-            // should not matter to a conforming server, but this endpoint
-            // answers "Invalid request format" to anything it dislikes without
-            // saying what, so matching exactly removes one variable.
             for (k, v) in &self.cfg.extra_authorize_params {
                 q.append_pair(k, v);
             }
-            q.append_pair("client_id", &self.cfg.client_id);
-            q.append_pair("response_type", "code");
-            q.append_pair("redirect_uri", redirect_uri);
-            q.append_pair("scope", &self.cfg.scopes.join(" "));
-            q.append_pair("code_challenge", challenge);
-            q.append_pair("code_challenge_method", Pkce::METHOD);
-            q.append_pair("state", state);
+            match self.cfg.flow {
+                // Order mirrors what the Claude Code CLI emits byte-for-byte.
+                // It should not matter to a conforming server, but this
+                // endpoint answers "Invalid request format" to anything it
+                // dislikes without saying what, so matching exactly removes
+                // one variable.
+                Flow::Oauth2 => {
+                    q.append_pair("client_id", &self.cfg.client_id);
+                    q.append_pair("response_type", "code");
+                    q.append_pair("redirect_uri", redirect_uri);
+                    q.append_pair("scope", &self.cfg.scopes.join(" "));
+                    q.append_pair("code_challenge", challenge);
+                    q.append_pair("code_challenge_method", Pkce::METHOD);
+                    q.append_pair("state", state);
+                }
+                // Three parameters, and `callback_url` rather than
+                // `redirect_uri`. Sending the RFC 6749 set as well would not
+                // help: there is no client to identify and no scope to ask for.
+                Flow::OpenRouterKey => {
+                    q.append_pair("callback_url", redirect_uri);
+                    q.append_pair("code_challenge", challenge);
+                    q.append_pair("code_challenge_method", Pkce::METHOD);
+                }
+            }
         }
         Ok(url.to_string())
     }
@@ -240,6 +277,10 @@ impl OAuthClient {
         verifier: &str,
         state: &str,
     ) -> Result<Credential> {
+        if self.cfg.flow == Flow::OpenRouterKey {
+            return self.post_key_exchange(code, verifier).await;
+        }
+
         let mut body = vec![
             ("grant_type", "authorization_code"),
             ("code", code),
@@ -259,6 +300,12 @@ impl OAuthClient {
     /// token: if the provider rotated the refresh token and we crash in
     /// between, the old one is already dead and the account is locked out.
     pub async fn refresh(&self, refresh_token: &str) -> Result<Credential> {
+        if self.cfg.flow == Flow::OpenRouterKey {
+            // Unreachable in practice — a key with no expiry is never seen as
+            // stale — but a silent RFC 6749 refresh against a key-exchange
+            // endpoint would fail in a far more confusing way than this.
+            bail!("this provider issues durable API keys; there is nothing to refresh");
+        }
         let scope = self.cfg.refresh_scopes.join(" ");
         let mut body = vec![
             ("grant_type", "refresh_token"),
@@ -275,6 +322,52 @@ impl OAuthClient {
             cred.refresh_token = Some(refresh_token.to_string());
         }
         Ok(cred)
+    }
+
+    /// OpenRouter's exchange: PKCE proof in, a durable API key out.
+    ///
+    /// The key has no expiry and no refresh token, so the credential we build
+    /// is deliberately bare — `is_expired()` is then permanently false and
+    /// nothing ever tries to rotate it.
+    async fn post_key_exchange(&self, code: &str, verifier: &str) -> Result<Credential> {
+        let resp = self
+            .http
+            .post(&self.cfg.token_url)
+            .json(&serde_json::json!({
+                "code": code,
+                "code_verifier": verifier,
+                "code_challenge_method": Pkce::METHOD,
+            }))
+            .send()
+            .await
+            .context("key exchange request failed")?;
+
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            bail!(
+                "key exchange returned {status}: {}",
+                body.chars().take(400).collect::<String>()
+            );
+        }
+
+        #[derive(Deserialize)]
+        struct KeyResponse {
+            key: String,
+        }
+
+        let kr: KeyResponse = serde_json::from_str(&body).context(
+            "the key exchange succeeded but returned no `key` field — \
+             the authorization code may have already been used (they are \
+             single-use and expire after ten minutes)",
+        )?;
+
+        Ok(Credential {
+            access_token: kr.key,
+            refresh_token: None,
+            expires_at: None,
+            extra: Default::default(),
+        })
     }
 
     async fn post_token(&self, params: &[(&str, &str)]) -> Result<Credential> {
@@ -375,6 +468,7 @@ mod tests {
 
     fn cfg() -> OAuthConfig {
         OAuthConfig {
+            flow: Flow::Oauth2,
             authorize_url: "https://example.com/oauth/authorize".into(),
             token_url: "https://example.com/oauth/token".into(),
             client_id: "https://example.com/metadata".into(),
@@ -475,6 +569,36 @@ mod tests {
             )
             .unwrap();
         assert!(url.contains("redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback"));
+    }
+
+    #[test]
+    fn openrouter_authorize_url_carries_only_what_that_flow_defines() {
+        let mut c = cfg();
+        c.flow = Flow::OpenRouterKey;
+        c.authorize_url = "https://openrouter.ai/auth".into();
+        c.extra_authorize_params.clear();
+        let client = OAuthClient::new(c);
+        let url = client
+            .authorize_url("http://localhost:41234/callback", "chal", "st4te")
+            .unwrap();
+
+        assert!(url.contains("callback_url=http%3A%2F%2Flocalhost%3A41234%2Fcallback"));
+        assert!(url.contains("code_challenge=chal"));
+        assert!(url.contains("code_challenge_method=S256"));
+        // No client to identify, no scope to request, and no `state` — sending
+        // any of them would be inventing parameters this endpoint never defined.
+        assert!(!url.contains("client_id="), "{url}");
+        assert!(!url.contains("scope="), "{url}");
+        assert!(!url.contains("state="), "{url}");
+        assert!(!url.contains("redirect_uri="), "{url}");
+    }
+
+    #[tokio::test]
+    async fn a_key_exchange_flow_refuses_to_refresh() {
+        let mut c = cfg();
+        c.flow = Flow::OpenRouterKey;
+        let err = OAuthClient::new(c).refresh("rt").await.unwrap_err().to_string();
+        assert!(err.contains("nothing to refresh"), "{err}");
     }
 
     #[test]

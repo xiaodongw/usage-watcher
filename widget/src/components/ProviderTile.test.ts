@@ -63,6 +63,55 @@ describe("ProviderTile", () => {
     expect(w.find(".badge").text()).toBe("borrowed");
   });
 
+  it("states an unavailable reason without dressing it as a failure", () => {
+    // opencode Zen and a free OpenRouter key both report this on every poll.
+    // Rendering a permanent fact in error red teaches you to ignore the colour.
+    const w = tile({
+      id: "opencode",
+      label: "opencode",
+      plan: null,
+      status: {
+        state: "unavailable",
+        reason: "This key is on opencode Zen, which publishes no usage API.",
+      },
+      meters: [],
+    });
+    expect(w.text()).toContain("publishes no usage API");
+    expect(w.find(".note").exists()).toBe(true);
+    expect(w.find(".problem").exists()).toBe(false);
+    expect(w.find(".track").exists()).toBe(false);
+  });
+
+  it("renders a balance and a spend row together, which OpenRouter emits", () => {
+    const w = tile({
+      id: "openrouter",
+      label: "OpenRouter",
+      plan: "paid",
+      meters: [
+        {
+          id: "credits",
+          label: "Credits",
+          kind: { type: "balance", amount: 74.75, currency: "USD", of_total: 100.5, unlimited: false },
+          severity: "normal",
+        },
+        {
+          id: "spend_month",
+          label: "This month",
+          kind: { type: "spend", amount: 22.75, currency: "USD", period: "monthly" },
+          severity: "normal",
+        },
+      ],
+    });
+
+    expect(w.text()).toContain("$74.75");
+    expect(w.text()).toContain("$22.75");
+    // The balance bar is inverted — 25% spent of the wallet reads as 25% full.
+    const bars = w.findAll(".fill");
+    expect(bars[0].attributes("style")).toContain("width: 25.6%");
+    // Spend is a total, not a limit, so it gets no scale to fill against.
+    expect(bars[1].attributes("style")).toContain("width: 0%");
+  });
+
   it("carries severity onto the bar so colour comes from the daemon's scale", () => {
     const w = tile({
       meters: [

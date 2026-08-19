@@ -97,6 +97,10 @@ pub enum MeterKind {
 #[ts(export, export_to = "../../../widget/src/types/")]
 pub enum Period {
     Rolling30d,
+    /// The provider's own billing month. Distinct from `Rolling30d` because
+    /// OpenRouter resets this counter on a calendar boundary, and labelling a
+    /// resetting counter as rolling would misread every month's first week.
+    Monthly,
     AllTime,
 }
 

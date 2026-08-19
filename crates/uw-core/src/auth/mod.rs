@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-pub use oauth::{Credential, LoginUi, OAuthClient, OAuthConfig, RedirectMode, TokenBody};
+pub use oauth::{Credential, Flow, LoginUi, OAuthClient, OAuthConfig, RedirectMode, TokenBody};
 pub use store::TokenStore;
 
 use crate::model::AuthKind;
@@ -103,8 +103,21 @@ impl TokenSource {
         Ok(())
     }
 
+    /// The store entry this mode reads from.
+    ///
+    /// A pasted token lives under its own key so it can coexist with an OAuth
+    /// grant for the same provider. Logout has to honour that: deleting
+    /// `<provider>` while the provider is in token mode reported success and
+    /// removed nothing.
+    fn entry(&self) -> &str {
+        match &self.mode {
+            AuthMode::ApiKey { keyring_entry } => keyring_entry,
+            _ => &self.provider,
+        }
+    }
+
     pub async fn logout(&self) -> Result<()> {
-        TokenStore::delete(&self.provider)?;
+        TokenStore::delete(self.entry())?;
         *self.cached.lock().await = None;
         Ok(())
     }

@@ -142,11 +142,13 @@ impl Config {
             .with_context(|| format!("could not write {}", path.display()))
     }
 
-    pub fn auth_pref(&self, provider: &str) -> AuthPreference {
-        self.providers
-            .get(provider)
-            .map(|p| p.auth)
-            .unwrap_or_default()
+    /// What the config file says, or `None` if it says nothing.
+    ///
+    /// Deliberately not defaulted here: the fallback belongs to the adapter,
+    /// which knows whether it has a vendor CLI to borrow from. Use
+    /// [`crate::providers::Any::auth_pref`] unless you truly want the raw value.
+    pub fn configured_auth(&self, provider: &str) -> Option<AuthPreference> {
+        self.providers.get(provider).map(|p| p.auth)
     }
 
     pub fn set_auth_pref(&mut self, provider: &str, pref: AuthPreference) {
@@ -173,9 +175,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unknown_provider_defaults_to_delegated_and_enabled() {
+    fn an_unconfigured_provider_is_enabled_and_defers_its_auth_to_the_adapter() {
         let c = Config::default();
-        assert_eq!(c.auth_pref("claude"), AuthPreference::Delegated);
+        assert_eq!(c.configured_auth("claude"), None);
         assert!(c.is_enabled("claude"));
     }
 
@@ -200,8 +202,8 @@ mod tests {
         let s = toml::to_string_pretty(&c).unwrap();
         let back: Config = toml::from_str(&s).unwrap();
 
-        assert_eq!(back.auth_pref("claude"), AuthPreference::Own);
-        assert_eq!(back.auth_pref("codex"), AuthPreference::Delegated);
+        assert_eq!(back.configured_auth("claude"), Some(AuthPreference::Own));
+        assert_eq!(back.configured_auth("codex"), Some(AuthPreference::Delegated));
     }
 
     #[test]
@@ -265,7 +267,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert_eq!(c.auth_pref("claude"), AuthPreference::Own);
+        assert_eq!(c.configured_auth("claude"), Some(AuthPreference::Own));
         assert!(!c.is_enabled("codex"));
         assert!(c.is_enabled("claude"));
     }

@@ -36,7 +36,7 @@ impl Poller {
         if !cfg.is_enabled(adapter.id()) {
             return None;
         }
-        let pref = cfg.auth_pref(adapter.id());
+        let pref = adapter.auth_pref(cfg);
         let source = adapter.token_source(pref).map_err(|e| format!("{e:#}"));
         Some(Poller {
             adapter,
