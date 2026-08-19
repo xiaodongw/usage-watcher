@@ -11,15 +11,23 @@
     "test": "vitest run",
     "tauri": "tauri",
     "app:dev": "tauri dev",
-    "app:build": "tauri build"
+    "app:build": "tauri build",
+    "android:init": "./mobile.sh android init",
+    "android:dev": "./mobile.sh android dev",
+    "android:build": "./mobile.sh android build",
+    "ios:init": "./mobile.sh ios init",
+    "ios:dev": "./mobile.sh ios dev",
+    "ios:build": "./mobile.sh ios build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "vue": "^3.5.13"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^26.2.0",
     "@vitejs/plugin-vue": "^5.2.1",
     "@vue/test-utils": "^2.4.11",
     "jsdom": "^26.1.0",

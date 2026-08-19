@@ -1,0 +1,106 @@
+/* Colours come from the shell's own palette where one exists, so the indicator
+   follows the user's theme instead of imposing a second one. The severity
+   colours are the exception: they must mean the same thing here as in the CLI
+   and the panel, so they are fixed. */
+
+.uw-panel-label {
+  padding-left: 5px;
+  font-feature-settings: "tnum";
+}
+
+.uw-normal {
+  color: inherit;
+}
+
+.uw-warning {
+  color: #e5a50a;
+}
+
+.uw-critical {
+  color: #e01b24;
+}
+
+.uw-offline {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.uw-header {
+  padding-top: 8px;
+  padding-bottom: 2px;
+  spacing: 6px;
+}
+
+.uw-provider {
+  font-weight: bold;
+}
+
+.uw-plan {
+  font-size: 0.8em;
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+}
+
+.uw-row {
+  spacing: 8px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  font-feature-settings: "tnum";
+}
+
+/* Dimmed rather than hidden: a reading we know is old still beats no reading,
+   as long as it does not pretend to be current. */
+.uw-stale {
+  opacity: 0.45;
+}
+
+.uw-meter-label {
+  min-width: 90px;
+  font-size: 0.9em;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.uw-track {
+  height: 6px;
+  border-radius: 3px;
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
+.uw-fill {
+  height: 6px;
+  border-radius: 3px;
+  background-color: #33d17a;
+}
+
+.uw-fill.uw-warning {
+  background-color: #e5a50a;
+}
+
+.uw-fill.uw-critical {
+  background-color: #e01b24;
+}
+
+.uw-value {
+  min-width: 55px;
+  text-align: right;
+}
+
+.uw-resets {
+  min-width: 55px;
+  text-align: right;
+  font-size: 0.85em;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* An adapter error is a sentence, not a code — let it wrap and be read. */
+.uw-error {
+  color: #e01b24;
+  font-size: 0.9em;
+}
+
+/* "Unavailable" is a permanent fact about a provider, not a failure. Painting
+   it in the error colour on every poll teaches you to ignore the colour. */
+.uw-note,
+.uw-hint {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 0.9em;
+}

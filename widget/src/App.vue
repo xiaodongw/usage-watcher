@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import ProviderTile from "./components/ProviderTile.vue";
+import SettingsPanel from "./components/SettingsPanel.vue";
 import { useDaemon, useNow } from "./lib/daemon";
 import { ago, mostConstrained } from "./lib/format";
 import { notify, requestBrowserPermission } from "./lib/notify";
+import { updateTray } from "./lib/tray";
 import type { Alert } from "./types/Alert";
 
 const now = useNow();
@@ -19,10 +21,22 @@ const { snapshot, connection, everConnected } = useDaemon(onAlert);
 const providers = computed(() => snapshot.value?.providers ?? []);
 const headline = computed(() => mostConstrained(providers.value));
 
+const showSettings = ref(false);
+
+// The tray icon carries the headline so it can be read without opening
+// anything — the whole reason for a tray widget. A no-op off the desktop.
+watch(
+  [providers, connection],
+  () => void updateTray(providers.value, connection.value === "live"),
+  { immediate: true },
+);
 </script>
 
 <template>
   <main @click="requestBrowserPermission">
+    <SettingsPanel v-if="showSettings" @close="showSettings = false" />
+
+    <template v-else>
     <header class="bar">
       <span class="dot" :class="connection" :title="`daemon ${connection}`" />
       <strong v-if="headline">
@@ -31,14 +45,16 @@ const headline = computed(() => mostConstrained(providers.value));
       <strong v-else>Usage Watcher</strong>
       <span class="spacer" />
       <span v-if="snapshot" class="when">{{ ago(snapshot.generated_at, now) }}</span>
+      <button class="gear" title="Daemon settings" @click.stop="showSettings = true">⚙</button>
     </header>
 
     <!-- Three distinct empty states. "Waiting" and "cannot reach" look the
          same on screen otherwise, and they need completely different fixes. -->
     <p v-if="!snapshot && connection === 'connecting'" class="empty">Connecting to uwd…</p>
     <p v-else-if="!snapshot && !everConnected" class="empty">
-      Cannot reach uwd. Start it with <code>uwd</code>, or set
-      <code>VITE_UWD_URL</code> if it runs elsewhere.
+      Cannot reach uwd. Start it with <code>uwd</code>, or
+      <button class="link" @click.stop="showSettings = true">set its address</button>
+      if it runs elsewhere.
     </p>
     <p v-else-if="providers.length === 0" class="empty">No providers enabled.</p>
 
@@ -52,6 +68,7 @@ const headline = computed(() => mostConstrained(providers.value));
     <p v-if="snapshot && connection === 'offline'" class="offline">
       Lost the connection to uwd — retrying.
     </p>
+    </template>
   </main>
 </template>
 
@@ -59,6 +76,22 @@ const headline = computed(() => mostConstrained(providers.value));
 main {
   min-width: 18rem;
   max-width: 26rem;
+}
+
+/* On a handset the window is whatever the screen is, so the panel stops being
+   a popover and becomes the app. */
+@media (max-width: 30rem) {
+  main {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+  }
+
+  /* Fingers, not a mouse pointer. */
+  .gear {
+    font-size: 1.05rem;
+    padding: 0.35rem 0.45rem;
+  }
 }
 
 .bar {
@@ -131,5 +164,31 @@ code {
   background: var(--track);
   border-radius: 3px;
   padding: 0.05rem 0.25rem;
+}
+
+.gear {
+  font: inherit;
+  font-size: 0.8rem;
+  line-height: 1;
+  background: none;
+  border: none;
+  color: var(--fg-faint);
+  cursor: pointer;
+  padding: 0.1rem 0.15rem;
+}
+
+.gear:hover {
+  color: var(--fg);
+}
+
+.link {
+  font: inherit;
+  font-size: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--fg);
+  text-decoration: underline;
+  cursor: pointer;
 }
 </style>

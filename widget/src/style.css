@@ -46,3 +46,23 @@ body {
   /* The Tauri window is sized to the content, so the body must not scroll. */
   overflow: hidden;
 }
+
+/* Phones. The same bundle runs in a tray popover 340px wide and full-screen on
+   a handset, and the second needs the panel to fill the width, to scroll, and
+   to keep clear of the notch and the home indicator. */
+@media (max-width: 30rem) {
+  html,
+  body {
+    /* `100%` would be the visual viewport, which on iOS shrinks and grows as
+       the address bar hides — the panel would resize while you scroll. */
+    height: 100dvh;
+  }
+
+  #app {
+    height: 100dvh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right)
+      env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+}

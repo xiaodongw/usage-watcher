@@ -1,0 +1,7 @@
+{
+  "identifier": "desktop",
+  "description": "Desktop-only additions. Kept in its own file because the autostart plugin is not compiled for Android or iOS, and naming a permission whose plugin is absent fails the build rather than being ignored.",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["panel", "main"],
+  "permissions": ["autostart:default"]
+}

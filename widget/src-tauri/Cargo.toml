@@ -11,14 +11,31 @@ edition = "2021"
 rust-version = "1.82"
 license = "MIT"
 
+# Everything lives in the library; `main.rs` is four lines in front of it.
+# Android links the app as a `cdylib` and iOS as a `staticlib`, neither of which
+# runs a Rust `main`, so a binary-only crate cannot be built for mobile at all.
+[lib]
+name = "usage_watcher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2" }
 tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Desktop-only. `single-instance` has no meaning where the OS already enforces
+# one process per app, `autostart` has no equivalent concept, and there is no
+# tray to draw an icon in — asking for any of them unconditionally is asking
+# the Android and iOS builds to fail. Cargo unions the features it finds here
+# with the base entry above, so `tauri` gains `tray-icon` on desktop only.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
 
 [profile.release]
 opt-level = "z"

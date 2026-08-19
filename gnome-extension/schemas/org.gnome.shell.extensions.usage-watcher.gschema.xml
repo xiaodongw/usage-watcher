@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="usage-watcher">
+  <schema id="org.gnome.shell.extensions.usage-watcher"
+          path="/org/gnome/shell/extensions/usage-watcher/">
+
+    <key name="daemon-url" type="s">
+      <default>"http://127.0.0.1:7878"</default>
+      <summary>Address of the uwd daemon</summary>
+      <description>
+        Where the collector is listening. Loopback when the daemon runs on this
+        machine; a Tailscale address when it runs elsewhere, in which case the
+        daemon requires a token before it will bind to anything non-loopback.
+      </description>
+    </key>
+
+    <key name="daemon-token" type="s">
+      <default>""</default>
+      <summary>Bearer token, if the daemon requires one</summary>
+      <description>
+        Must match [daemon] token in the daemon's config.toml. Empty when the
+        daemon is on loopback, where it accepts unauthenticated requests.
+      </description>
+    </key>
+
+    <key name="show-percentage" type="b">
+      <default>true</default>
+      <summary>Show the most-constrained figure beside the icon</summary>
+      <description>
+        Off leaves only the icon, which still changes colour with severity.
+      </description>
+    </key>
+
+    <key name="notifications" type="b">
+      <default>true</default>
+      <summary>Notify when a meter crosses into warning or critical</summary>
+      <description>
+        Alerts are edge-triggered by the daemon, so this is one notification per
+        crossing rather than one per poll.
+      </description>
+    </key>
+
+  </schema>
+</schemalist>

@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "What the panel window is allowed to ask the Rust side for. Tauri v2 denies everything not listed here, so a plugin that is registered but not granted fails silently at runtime.",
-  "windows": ["panel"],
+  "description": "What the panel window may ask the Rust side for on every platform. Tauri v2 denies anything not listed here, and does it silently at runtime rather than at build time — which is how the notification permission went missing the first time.",
+  "windows": ["panel", "main"],
   "permissions": ["core:default", "notification:default"]
 }

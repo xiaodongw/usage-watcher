@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { flushPromises, mount } from "@vue/test-utils";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import App from "./App.vue";
+import { DEFAULTS, settings } from "./lib/settings";
 import type { Snapshot } from "./types/Snapshot";
 
 /**
@@ -9,11 +10,13 @@ import type { Snapshot } from "./types/Snapshot";
  */
 class FakeEventSource {
   static last: FakeEventSource | null = null;
+  static opened: FakeEventSource[] = [];
   listeners: Record<string, ((e: unknown) => void)[]> = {};
   closed = false;
 
   constructor(public url: string) {
     FakeEventSource.last = this;
+    FakeEventSource.opened.push(this);
   }
 
   addEventListener(type: string, fn: (e: unknown) => void) {
@@ -69,9 +72,19 @@ const SNAPSHOT: Snapshot = {
   ],
 };
 
+// Without this, every App mounted by an earlier case stays alive with its
+// watcher attached to the shared `settings` singleton — so changing the address
+// in one test redials in all of them.
+enableAutoUnmount(afterEach);
+
 beforeEach(() => {
   FakeEventSource.last = null;
+  FakeEventSource.opened = [];
   vi.stubGlobal("EventSource", FakeEventSource);
+  // `settings` is a module singleton, so without this each case inherits
+  // whatever address the previous one dialled.
+  localStorage.clear();
+  settings.value = { ...DEFAULTS };
 });
 
 describe("App", () => {
@@ -124,6 +137,64 @@ describe("App", () => {
     await flushPromises();
     // These need different fixes, so they must not look the same.
     expect(w.text()).toContain("Cannot reach uwd");
+  });
+
+  it("opens the settings screen from the header, and closes it again", async () => {
+    const w = mount(App);
+    FakeEventSource.last!.emit("snapshot", SNAPSHOT);
+    await flushPromises();
+
+    await w.find(".gear").trigger("click");
+    expect(w.text()).toContain("Address");
+    // The tiles are replaced, not merely covered.
+    expect(w.findAll(".tile")).toHaveLength(0);
+
+    await w.findAll("button").find((b) => b.text() === "Close")!.trigger("click");
+    expect(w.findAll(".tile")).toHaveLength(2);
+  });
+
+  it("offers the settings screen from the cannot-reach state, where the fix lives", async () => {
+    const w = mount(App);
+    FakeEventSource.last!.emit("error");
+    await flushPromises();
+
+    expect(w.text()).toContain("Cannot reach uwd");
+    await w.find(".empty .link").trigger("click");
+    expect(w.text()).toContain("Address");
+  });
+
+  it("redials when the daemon address changes", async () => {
+    const w = mount(App);
+    FakeEventSource.last!.emit("snapshot", SNAPSHOT);
+    await flushPromises();
+    const first = FakeEventSource.last!;
+    expect(first.url).toContain("127.0.0.1:7878");
+
+    settings.value = { url: "http://100.64.0.1:7878", token: "tok" };
+    await flushPromises();
+
+    // A phone that has just been told the right address must not keep serving
+    // the old stream, and must not leak it either.
+    expect(first.closed).toBe(true);
+    expect(FakeEventSource.opened).toHaveLength(2);
+    expect(FakeEventSource.last!.url).toBe("http://100.64.0.1:7878/events?token=tok");
+    w.unmount();
+  });
+
+  it("forgets it ever connected when pointed at a different daemon", async () => {
+    const w = mount(App);
+    FakeEventSource.last!.emit("snapshot", SNAPSHOT);
+    await flushPromises();
+
+    settings.value = { url: "http://elsewhere:7878", token: "" };
+    await flushPromises();
+    FakeEventSource.last!.emit("error");
+    await flushPromises();
+
+    // Having reached *a* daemon once says nothing about this one, so this is
+    // "cannot reach", not "lost the connection".
+    expect(w.text()).toContain("Cannot reach uwd");
+    expect(w.text()).not.toContain("Lost the connection");
   });
 
   it("closes the stream when unmounted rather than leaking it", () => {

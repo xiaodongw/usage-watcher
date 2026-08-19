@@ -1,0 +1,9 @@
+{
+  "uuid": "usage-watcher@usagewatcher.dev",
+  "name": "Usage Watcher",
+  "description": "Remaining usage across Claude Code, OpenAI Codex, opencode and OpenRouter, in the top bar. Reads a running uwd daemon over HTTP and its event stream; holds no credentials of its own.",
+  "shell-version": ["45", "46", "47", "48", "49"],
+  "url": "https://github.com/xiaodongw/usage-watcher",
+  "settings-schema": "org.gnome.shell.extensions.usage-watcher",
+  "version-name": "0.1.0"
+}

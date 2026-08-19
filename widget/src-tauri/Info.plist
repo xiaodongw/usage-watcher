@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Merged into the generated Info.plist by the Tauri CLI at bundle time.
+
+  LSUIElement makes this a menu-bar accessory: no Dock icon, no entry in the
+  app switcher, no menu bar of its own. `set_activation_policy` in lib.rs does
+  the same thing at runtime, which is what covers `tauri dev` — this is what
+  covers the shipped bundle, including its very first launch before any Rust
+  has run.
+-->
+<plist version="1.0">
+  <dict>
+    <key>LSUIElement</key>
+    <true/>
+  </dict>
+</plist>
