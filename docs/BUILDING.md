@@ -54,12 +54,15 @@ app:build`, which invokes its own Cargo workspace.
 
 ## Common to everything
 
-**Rust 1.89 or newer**, via [rustup](https://rustup.rs). The workspace still
-declares `rust-version = "1.82"`, and that has quietly stopped being true: the
-locked dependency tree wants 1.89 — `zbus`, `zvariant` and `time-macros` say so
-— and a 1.82 toolchain fails at resolution before compiling anything. Nobody
-noticed because every machine here runs something far newer; the containerised
-Linux build found it, because that pins its compiler.
+**Rust 1.89 or newer**, via [rustup](https://rustup.rs). The workspace pins
+`rust-version = "1.89"`; anything newer is fine.
+
+That number belongs to the dependency tree rather than to our own code, which
+needs nothing past 1.82 — `zbus`, `zvariant` and `time-macros` all want 1.89,
+and cargo refuses to resolve before compiling a line. It read 1.82 for months
+without anyone noticing, because every machine here runs something far newer.
+The containerised Linux build is what caught it, since that pins its compiler,
+and it is the thing to re-check with after a `cargo update`.
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # not Windows
