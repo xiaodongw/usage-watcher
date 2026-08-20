@@ -227,12 +227,22 @@ stops working, see [Troubleshooting](#troubleshooting).
 
 ### Icon
 
-The repo ships a placeholder. Replace it when you have a real one — this
-generates every size and format Windows, macOS and Linux each want:
+The full icon set is committed — including `icons/icon.ico`, which
+`tauri-build` **requires** on Windows and whose absence fails the build before
+a line of Rust is compiled. Nothing to do unless you want a different picture.
 
-```powershell
-npm run tauri icon path\to\icon.png
+The artwork is still a placeholder. To replace it, edit or replace
+`src-tauri/app-icon.png` (1024×1024, transparent) and regenerate every size and
+format Windows, macOS, Linux, Android and iOS each want:
+
+```sh
+cd widget
+npm run tauri icon src-tauri/app-icon.png
 ```
+
+That command needs no platform toolchain — it runs anywhere Node does, so the
+whole set can be regenerated from Linux and committed for the platforms that
+cannot build there.
 
 ## macOS
 
