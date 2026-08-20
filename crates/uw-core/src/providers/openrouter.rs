@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use super::{Adapter, AuthPreference, Spec};
 use crate::auth::{Credential, Flow, OAuthConfig, RedirectMode, TokenBody};
+use crate::limits::rate_limited;
 use crate::model::{AuthKind, Meter, MeterKind, Period, Provider, Severity, Status};
 
 /// Works with any inference key, and is the only endpoint that always answers.
@@ -130,8 +131,12 @@ async fn get_json<T: serde::de::DeserializeOwned>(
         .with_context(|| format!("could not reach {url}"))?;
 
     let status = resp.status();
+    let limited = rate_limited(status, resp.headers(), "OpenRouter");
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
+        if let Some(limited) = limited {
+            return Err(limited.into());
+        }
         bail!(
             "{url} returned {status}: {}",
             body.chars().take(300).collect::<String>()

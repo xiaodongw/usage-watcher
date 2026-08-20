@@ -100,6 +100,16 @@ before reading a tile:
   red error. If the shape does change, the adapter fails loudly rather than
   quietly rendering a healthy tile with no rows.
 
+**Anthropic rate limits the usage endpoint by IP, not by account.** An
+unauthenticated request draws the same `429`, and the refusal carries
+`Retry-After: 3600` — an hour. Everything on that address shares the budget:
+two daemons (a Windows app and one in WSL both count), and every restart, since
+a poller fetches once before its first sleep so a fresh sign-in appears
+straight away. A 429 is obeyed rather than retried through: the provider waits
+exactly as long as it was asked to, and the tile says when it will be back. If
+you trip it while testing, nothing is broken — leave it alone for the hour.
+Only `/api/oauth/usage` is limited, so Claude Code itself keeps working.
+
 Adding a provider means one file in `crates/uw-core/src/providers/` and one arm
 in the `Any` enum beside it. Everything downstream — the CLI table, the panel,
 the "Add provider" screen, alerting, the schedule — is driven off that registry

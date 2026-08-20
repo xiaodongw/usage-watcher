@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use super::{Adapter, AuthPreference, Spec};
 use crate::auth::{Credential, Flow, OAuthConfig, RedirectMode, TokenBody};
+use crate::limits::rate_limited;
 use crate::model::{AuthKind, Meter, Provider, Status};
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
@@ -123,8 +124,12 @@ impl Adapter for Codex {
             .context("could not reach the Codex usage endpoint")?;
 
         let status = resp.status();
+        let limited = rate_limited(status, resp.headers(), "The Codex usage endpoint");
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
+            if let Some(limited) = limited {
+                return Err(limited.into());
+            }
             bail!(
                 "usage endpoint returned {status}: {}",
                 body.chars().take(300).collect::<String>()

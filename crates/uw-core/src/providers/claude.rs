@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use super::{Adapter, AuthPreference, Spec};
 use crate::auth::{Credential, Flow, OAuthConfig, RedirectMode, TokenBody};
+use crate::limits::rate_limited;
 use crate::model::{AuthKind, Meter, MeterKind, Provider, Severity, Status};
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
@@ -189,8 +190,17 @@ impl Adapter for Claude {
             .context("could not reach the Anthropic usage endpoint")?;
 
         let status = resp.status();
+        // Read before `text()` consumes the response. This endpoint is limited
+        // per IP rather than per account — an unauthenticated request draws the
+        // same 429 — and it answers with an hour, which is four times our own
+        // longest backoff. Ignoring it means never waiting long enough to be
+        // let back in.
+        let limited = rate_limited(status, resp.headers(), "The Anthropic usage endpoint");
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
+            if let Some(limited) = limited {
+                return Err(limited.into());
+            }
             // A token can be perfectly valid and still be refused here. The
             // one-year token from `claude setup-token` is the common case: it
             // carries `user:inference` only, so it can make model requests but

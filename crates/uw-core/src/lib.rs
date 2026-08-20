@@ -4,6 +4,7 @@
 pub mod auth;
 pub mod collect;
 pub mod config;
+pub mod limits;
 pub mod model;
 pub mod providers;
 

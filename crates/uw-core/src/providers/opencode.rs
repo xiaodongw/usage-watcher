@@ -35,6 +35,7 @@ use std::path::{Path, PathBuf};
 
 use super::{Adapter, AuthPreference, Spec};
 use crate::auth::{Credential, OAuthConfig};
+use crate::limits::rate_limited;
 use crate::model::{AuthKind, Meter, Provider, Severity, Status};
 
 const USAGE_URL: &str = "https://opencode.ai/zen/go/v1/usage";
@@ -123,6 +124,7 @@ impl Adapter for Opencode {
             .context("could not reach the opencode usage endpoint")?;
 
         let status = resp.status();
+        let limited = rate_limited(status, resp.headers(), "The opencode usage endpoint");
         let body = resp.text().await.unwrap_or_default();
 
         // 403 is the endpoint's way of saying "this key is not on Go". That is
@@ -137,6 +139,9 @@ impl Adapter for Opencode {
         }
 
         if !status.is_success() {
+            if let Some(limited) = limited {
+                return Err(limited.into());
+            }
             bail!(
                 "usage endpoint returned {status}: {}",
                 body.chars().take(300).collect::<String>()
