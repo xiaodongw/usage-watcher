@@ -10,6 +10,9 @@ const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
   plugins: [vue()],
+  // Cargo's own errors are the ones worth reading during `tauri dev`, and Vite
+  // wipes the scrollback on every restart otherwise.
+  clearScreen: false,
   // Tauri serves the built bundle from a file:// style origin, so every asset
   // reference has to be relative rather than rooted at /.
   base: "./",
@@ -21,6 +24,13 @@ export default defineConfig({
     host: host || true,
     strictPort: true,
     hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
+    watch: {
+      // Never watch the Rust side. `src-tauri/target` is written continuously
+      // while Cargo builds, and on Windows a DLL that is mid-write is locked —
+      // the watcher then dies with EBUSY and takes `tauri dev` down with it.
+      // Nothing under here is a frontend source file, so there is nothing lost.
+      ignored: ["**/src-tauri/**"],
+    },
   },
   build: {
     target: "es2022",
