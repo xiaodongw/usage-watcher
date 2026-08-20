@@ -44,7 +44,7 @@ function pick(p: ProviderInfo) {
     <ul class="rows">
       <li v-for="p in addable" :key="p.id">
         <button class="card" @click="pick(p)">
-          <span class="dot" :style="{ background: p.accent }" />
+          <img class="icon" :src="p.icon" alt="" />
           <span class="name">
             <strong>{{ p.label }}</strong>
             <small>{{ p.summary }}</small>
@@ -119,10 +119,12 @@ function pick(p: ProviderInfo) {
   background: var(--track);
 }
 
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+/* Larger than the list's, because this row is two lines tall and an icon
+   sized for a one-line row looks lost beside it. */
+.icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
 }
 
 .name {

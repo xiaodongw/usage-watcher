@@ -75,7 +75,7 @@ impl Adapter for Codex {
         // accepted by the field and then fail on every single poll.
         Spec::new(
             "OpenAI Codex — the rolling 7-day limit on your ChatGPT plan.",
-            "#10a37f",
+            include_bytes!("icons/codex.png"),
         )
         .vendor_cli("Codex")
         .docs("https://developers.openai.com/codex/cli")

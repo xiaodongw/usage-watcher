@@ -111,7 +111,7 @@ impl Adapter for Claude {
         Spec::new(
             "Claude Code — the 5-hour session window, the weekly limits, and \
              the per-model weekly caps.",
-            "#d97757",
+            include_bytes!("icons/claude.png"),
         )
         .vendor_cli("Claude Code")
         .docs("https://claude.com/product/claude-code")

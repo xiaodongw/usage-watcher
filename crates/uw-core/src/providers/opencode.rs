@@ -82,7 +82,7 @@ impl Adapter for Opencode {
     fn spec(&self) -> Spec {
         Spec::new(
             "opencode Zen Go — rolling, weekly and monthly usage windows.",
-            "#6366f1",
+            include_bytes!("icons/opencode.png"),
         )
         .vendor_cli("opencode")
         .docs("https://opencode.ai/zen")

@@ -57,7 +57,7 @@ function describe(auth: AuthPreference): string {
 
     <ul class="rows">
       <li v-for="p in configured" :key="p.id" class="row">
-        <span class="dot" :style="{ background: p.accent }" />
+        <img class="icon" :src="p.icon" alt="" />
         <span class="name">
           <strong>{{ p.label }}</strong>
           <small>
@@ -152,10 +152,13 @@ function describe(auth: AuthPreference): string {
   border-bottom: 1px solid var(--rule);
 }
 
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+/* The vendor's own mark, from the manifest. Nothing tints, inverts or
+   filters it: each one already carries whatever background it needs to read
+   on both themes, and a `filter` that fixed one of them would wreck another. */
+.icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
 }
 
 .name {

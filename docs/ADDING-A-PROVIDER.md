@@ -27,9 +27,9 @@ enough that no consumer has to know it exists.
 
 ## The manifest is derived, not declared
 
-`Spec` carries only what cannot be worked out: the one-line summary, the accent
-colour, the docs link, the wording for a pasted key, and which vendor CLI a
-delegated read borrows from.
+`Spec` carries only what cannot be worked out: the one-line summary, the icon,
+the docs link, the wording for a pasted key, and which vendor CLI a delegated
+read borrows from.
 
 Which login methods a provider offers is **not** in there. It comes from the
 other methods:
@@ -47,6 +47,37 @@ account id from the id_token, so a pasted API key would be accepted by the field
 and then fail on every poll. Leaving the prompt out is the whole of expressing
 that.
 
+## The icon
+
+`Spec::new` takes PNG bytes, not a path or a URL, and the file lives beside the
+adapters in `crates/uw-core/src/providers/icons/`. Compiled in, base64'd into
+the manifest, and rendered from a `data:` URI.
+
+That is three deliberate constraints in a row, and each has a reason. It is
+*compiled in* because a config screen that has to reach the network to draw a
+list of things it already knows is a config screen that shows four broken
+squares on a plane. It is a `data:` URI because the panel's CSP is
+`img-src 'self' data:` — a `http://localhost:<port>/icon` route would be
+blocked, and widening the CSP to allow one is a poor trade for one image. And
+it is *small* — 64×64, palette-quantised, under 2 KB — because every one of
+them rides along in every `/providers` response.
+
+To add one, take the provider's own favicon or apple-touch-icon, resize to
+64×64 and quantise:
+
+```python
+from PIL import Image
+im = Image.open("downloaded.png").convert("RGBA").resize((64, 64), Image.LANCZOS)
+im.quantize(colors=64, method=Image.FASTOCTREE, dither=Image.NONE).save(
+    "crates/uw-core/src/providers/icons/acme.png", optimize=True)
+```
+
+Check it on **both** themes before committing. Nothing in the CSS tints or
+inverts the mark — a `filter` that rescued a black-on-transparent logo in dark
+mode would wreck the three that carry their own background — so a mark that is
+invisible on one theme stays invisible. Record where you got it in
+`icons/SOURCES.md`; these are vendor trademarks, used to identify the vendor.
+
 ## Sketch
 
 ```rust
@@ -57,7 +88,7 @@ impl Adapter for Acme {
     fn label(&self) -> &'static str { "Acme AI" }
 
     fn spec(&self) -> Spec {
-        Spec::new("Acme — monthly credit balance.", "#4f46e5")
+        Spec::new("Acme — monthly credit balance.", include_bytes!("icons/acme.png"))
             .docs("https://acme.example/docs")
             .token(
                 "Paste an API key",        // the button

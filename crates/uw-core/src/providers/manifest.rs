@@ -27,9 +27,15 @@ pub struct ProviderInfo {
     pub label: String,
     /// One line, shown under the name in the picker.
     pub summary: String,
-    /// Tile accent as a CSS hex colour, so a list of providers is scannable by
-    /// shape rather than by reading every label.
-    pub accent: String,
+    /// The provider's own mark, as a `data:` URI.
+    ///
+    /// Inlined rather than linked because the panel's CSP is
+    /// `img-src 'self' data:`: an `http://localhost:<port>/icon` would be
+    /// blocked outright, and even allowed it would leave a row of broken
+    /// squares whenever the daemon was slow or on another machine. A name is
+    /// read; a mark is recognised, which is the whole point of putting one
+    /// next to a list of four near-identical rows.
+    pub icon: String,
     #[ts(optional)]
     pub docs_url: Option<String>,
     /// Every way in to this provider, best first. Never empty — a provider
@@ -106,7 +112,14 @@ pub struct TokenPrompt {
 #[derive(Debug, Clone)]
 pub struct Spec {
     pub summary: &'static str,
-    pub accent: &'static str,
+    /// The provider's mark as PNG bytes, `include_bytes!` from `icons/`.
+    ///
+    /// Compiled in rather than fetched: these are 64x64 and palette-quantised
+    /// precisely because all of them ride along in every `/providers`
+    /// response, and downloading a logo at runtime would make the config
+    /// screen depend on the network to render a list of things it already
+    /// knows.
+    pub icon: &'static [u8],
     pub docs_url: Option<&'static str>,
     /// `None` for providers where a pasted key cannot work. Codex is the case
     /// that matters: its usage endpoint needs an OAuth access token and an
@@ -119,10 +132,10 @@ pub struct Spec {
 
 impl Spec {
     /// A spec with only the two fields every provider must answer.
-    pub fn new(summary: &'static str, accent: &'static str) -> Self {
+    pub fn new(summary: &'static str, icon: &'static [u8]) -> Self {
         Spec {
             summary,
-            accent,
+            icon,
             docs_url: None,
             token: None,
             vendor_cli: None,
@@ -156,6 +169,12 @@ impl Spec {
         self.vendor_cli = Some(name);
         self
     }
+}
+
+/// Wrap PNG bytes as a `data:` URI an `<img src>` can take verbatim.
+fn data_uri(png: &[u8]) -> String {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    format!("data:image/png;base64,{}", STANDARD.encode(png))
 }
 
 /// Assemble the manifest from what the adapter can answer.
@@ -222,7 +241,7 @@ pub(super) fn build(
         id: id.to_string(),
         label: label.to_string(),
         summary: spec.summary.to_string(),
-        accent: spec.accent.to_string(),
+        icon: data_uri(spec.icon),
         docs_url: spec.docs_url.map(Into::into),
         methods,
     }

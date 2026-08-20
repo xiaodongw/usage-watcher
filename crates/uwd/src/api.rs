@@ -47,7 +47,8 @@ pub struct ProvidersView {
 pub struct ConfiguredProvider {
     pub id: String,
     pub label: String,
-    pub accent: String,
+    /// Same `data:` URI the catalogue carries — see [`ProviderInfo::icon`].
+    pub icon: String,
     pub auth: AuthPreference,
     pub enabled: bool,
     /// Whether a credential exists — not whether it still works. The provider
@@ -517,7 +518,7 @@ fn build_view(cfg: &Config) -> Result<ProvidersView> {
             Some(ConfiguredProvider {
                 id: id.clone(),
                 label: info.label,
-                accent: info.accent,
+                icon: info.icon,
                 auth: pc.auth,
                 enabled: pc.enabled,
                 signed_in,

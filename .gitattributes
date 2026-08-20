@@ -1,0 +1,8 @@
+# `core.autocrlf` is on for most people working on this repo, and Git decides
+# what is binary by sniffing the first 8000 bytes for a NUL. That heuristic has
+# never been wrong about a PNG — but a mangled icon is a silent failure that
+# shows up as a broken square on someone else's machine, days later, and this
+# repo has already lost an afternoon to a bad icon checkout. Say it outright.
+*.png binary
+*.ico binary
+*.icns binary

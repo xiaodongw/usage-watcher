@@ -75,7 +75,7 @@ impl Adapter for OpenRouter {
         Spec::new(
             "OpenRouter — credits left on the account, and any cap on the key \
              itself.",
-            "#8b5cf6",
+            include_bytes!("icons/openrouter.png"),
         )
         .docs("https://openrouter.ai/docs")
         .token(

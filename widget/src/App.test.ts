@@ -75,6 +75,13 @@ const SNAPSHOT: Snapshot = {
 };
 
 /**
+ * Stands in for the vendor mark the daemon inlines. A real one is a few
+ * kilobytes of base64 and jsdom never decodes it, so the bytes would only be
+ * noise in the fixture.
+ */
+const ICON = "data:image/png;base64,iVBORw0KGgo=";
+
+/**
  * The provider manifest, as the daemon builds it from the adapters. Only the
  * fields the UI actually renders — the point of the manifest is that the UI
  * does not know what a "claude" is.
@@ -85,7 +92,7 @@ const CATALOGUE: ProvidersView = {
       id: "claude",
       label: "Claude Code",
       summary: "Session and weekly windows.",
-      accent: "#d97757",
+      icon: ICON,
       methods: [
         {
           auth: "own",
@@ -130,7 +137,7 @@ const CONFIGURED: ProvidersView = {
     {
       id: "claude",
       label: "Claude Code",
-      accent: "#d97757",
+      icon: ICON,
       auth: "own",
       enabled: true,
       signed_in: true,
@@ -283,6 +290,22 @@ describe("App", () => {
 
     expect(w.text()).toContain("Claude Code");
     expect(w.findAll(".row")).toHaveLength(1);
+  });
+
+  it("marks each row with the provider's own icon from the manifest", async () => {
+    const w = mount(App);
+    providersView.value = CONFIGURED;
+    FakeEventSource.last!.emit("snapshot", SNAPSHOT);
+    await flushPromises();
+    await w.find(".gear").trigger("click");
+
+    // Four rows of similar-length names are read one by one; four marks are
+    // recognised at a glance. The `src` must come from the manifest — binding
+    // a field the daemon does not send renders a broken image, and the row
+    // still looks fine in a passing test that only checks the tag is there.
+    const icon = w.find(".row .icon");
+    expect(icon.exists()).toBe(true);
+    expect(icon.attributes("src")).toBe(ICON);
   });
 
   it("asks before deleting a credential, which cannot be undone", async () => {

@@ -10,10 +10,16 @@ export type ProviderInfo = { id: string, label: string,
  */
 summary: string, 
 /**
- * Tile accent as a CSS hex colour, so a list of providers is scannable by
- * shape rather than by reading every label.
+ * The provider's own mark, as a `data:` URI.
+ *
+ * Inlined rather than linked because the panel's CSP is
+ * `img-src 'self' data:`: an `http://localhost:<port>/icon` would be
+ * blocked outright, and even allowed it would leave a row of broken
+ * squares whenever the daemon was slow or on another machine. A name is
+ * read; a mark is recognised, which is the whole point of putting one
+ * next to a list of four near-identical rows.
  */
-accent: string, docs_url?: string, 
+icon: string, docs_url?: string, 
 /**
  * Every way in to this provider, best first. Never empty — a provider
  * with no way to authenticate could not have an adapter.
