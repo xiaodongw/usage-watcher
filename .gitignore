@@ -14,3 +14,8 @@ widget/src-tauri/gen/
 
 # Compiled GSettings schema; gnome-extension/install.sh builds it on install.
 gnome-extension/schemas/gschemas.compiled
+
+# Caches for the containerised Linux release build (scripts/package.sh --container).
+# Kept out of the native `target/` so the two toolchains do not invalidate each
+# other every time you alternate between them.
+.container-cache/

@@ -54,8 +54,12 @@ app:build`, which invokes its own Cargo workspace.
 
 ## Common to everything
 
-**Rust 1.82 or newer**, via [rustup](https://rustup.rs). The workspace pins
-`rust-version = "1.82"`; anything newer is fine.
+**Rust 1.89 or newer**, via [rustup](https://rustup.rs). The workspace still
+declares `rust-version = "1.82"`, and that has quietly stopped being true: the
+locked dependency tree wants 1.89 — `zbus`, `zvariant` and `time-macros` say so
+— and a 1.82 toolchain fails at resolution before compiling anything. Nobody
+noticed because every machine here runs something far newer; the containerised
+Linux build found it, because that pins its compiler.
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # not Windows
@@ -434,6 +438,48 @@ then writes `dist/usage-watcher-<version>-<platform>.zip` containing:
 | `README.txt` | what to double-click, and where the settings live |
 
 There is no cross-compiling here either: each zip is built on its own OS.
+
+### The Linux zip is built in a container
+
+```sh
+scripts/package.sh --container
+```
+
+Same zip, built inside Ubuntu 22.04, and this is what a release wants. The
+reason is glibc: its symbol versioning is backward compatible and not forward,
+so a binary linked against 2.35 runs on 2.39 while one linked against 2.39 will
+not start on 2.35 at all. **The build host, not the target, decides who can run
+the result.** Building natively on a current distribution quietly set that floor
+at glibc 2.39 — which excluded Debian 12, the current stable release.
+
+22.04 is as far back as it goes, and the limit is WebKit rather than glibc:
+Tauri v2 needs webkit2gtk **4.1**, 20.04 has only 4.0, and no amount of glibc
+compatibility helps with a library that is not there. The reasoning, and the
+one-line command that establishes it, are in the header of
+[`scripts/Dockerfile.linux`](../scripts/Dockerfile.linux).
+
+The result reaches further back than the base does. A binary's floor is the
+newest symbol it actually references, not the glibc it was linked against, and
+these land on **2.34** — Ubuntu 22.04, Debian 12, RHEL 9 and Rocky 9 included.
+Worth re-measuring after a dependency bump rather than assuming it holds:
+
+```sh
+objdump -T usage-watcher | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1
+```
+
+glibc is only half of it for the app, which also needs webkit2gtk-4.1 at run
+time — a distribution carrying only 4.0 can run `uw` and `uwd`, which link no
+GUI library at all, but not the panel.
+
+It runs as your own user, so nothing it writes is owned by root, and it keeps
+its caches in `.container-cache/` rather than in `target/` — two toolchains
+built against two different glibcs would otherwise invalidate each other's
+artifacts every time you alternated between a native and a container build.
+
+Nothing about this affects GNOME, which is the natural worry. The extension is
+plain GJS and its schema is compiled on the user's machine by its own installer,
+and the app's tray library is `dlopen`ed at runtime rather than linked — so both
+bind to whatever the user actually has, not to what the container had.
 
 Unsigned, which is worth being honest about. Windows SmartScreen will warn on
 first run ("More info" → "Run anyway") and macOS Gatekeeper will refuse until

@@ -13,10 +13,21 @@
 #   uw              one-shot read from a terminal
 #   uwd             the collector on its own, for a headless box or WSL
 #
-# Usage: scripts/package.sh [output-dir]
+# Usage: scripts/package.sh [--container] [output-dir]
+#
+#   --container   build the Linux zip inside Ubuntu 22.04 rather than natively.
+#                 Only the build host decides which machines can run the result
+#                 — see scripts/Dockerfile.linux — so a release build wants this
+#                 and a local one does not.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+use_container=""
+if [ "${1:-}" = "--container" ]; then
+  use_container=1
+  shift
+fi
 out="${1:-$root/dist}"
 version="$(grep -m1 '^version' "$root/Cargo.toml" | cut -d'"' -f2)"
 
@@ -95,6 +106,44 @@ preflight() {
   } >&2
   exit 1
 }
+
+# Build in a container instead, and stop: everything below runs inside it.
+#
+# The caches are bind-mounted to their own directories rather than shared with
+# the native build. Two toolchains against two different glibcs would otherwise
+# invalidate each other's `target/` on every alternation, and each rebuild from
+# cold costs minutes.
+if [ -n "$use_container" ]; then
+  [ "$(uname -s)" = "Linux" ] || {
+    echo "--container builds the Linux zip; run it on Linux (or in WSL)." >&2
+    exit 1
+  }
+  command -v docker >/dev/null || { echo "docker is not on PATH" >&2; exit 1; }
+
+  image="usage-watcher-build:jammy"
+  cache="$root/.container-cache"
+  mkdir -p "$cache"/{cargo,npm,home,target,src-tauri-target,node_modules} "$out"
+
+  echo "==> building the image"
+  docker build -q -f "$root/scripts/Dockerfile.linux" -t "$image" "$root/scripts" >/dev/null
+
+  echo "==> building in $image"
+  # As the invoking user, so that everything written into the checkout — the
+  # zip, and any file a build step touches — belongs to them and not to root.
+  exec docker run --rm \
+    --user "$(id -u):$(id -g)" \
+    -e HOME=/cache/home \
+    -e CARGO_HOME=/cache/cargo \
+    -e npm_config_cache=/cache/npm \
+    -v "$root:/work" \
+    -v "$cache:/cache" \
+    -v "$cache/target:/work/target" \
+    -v "$cache/src-tauri-target:/work/widget/src-tauri/target" \
+    -v "$cache/node_modules:/work/widget/node_modules" \
+    -w /work \
+    "$image" \
+    scripts/package.sh "${out#$root/}"
+fi
 
 preflight
 
