@@ -59,6 +59,14 @@ struct Inner {
     /// appends. `BTreeMap` keeps the order stable across snapshots — a widget
     /// whose rows reshuffle on every update is unusable.
     providers: BTreeMap<String, Provider>,
+    /// Display order, from config: the ids the user dragged into place.
+    ///
+    /// Held here rather than sorted by each viewer because the snapshot is the
+    /// daemon's product and the order is part of it. The panel, the CLI and
+    /// anything else reading `/snapshot` then agree on the order for free,
+    /// instead of each reimplementing it against a provider list that arrives
+    /// on a different event.
+    order: Vec<String>,
     /// Consecutive failure count per provider.
     failures: HashMap<String, u32>,
     /// Last severity seen per `(provider, meter)`, for edge-triggering.
@@ -72,6 +80,7 @@ impl Hub {
         Hub {
             inner: RwLock::new(Inner {
                 providers: BTreeMap::new(),
+                order: Vec::new(),
                 failures: HashMap::new(),
                 severities: HashMap::new(),
                 history: VecDeque::new(),
@@ -86,11 +95,25 @@ impl Hub {
     }
 
     pub async fn snapshot(&self) -> Snapshot {
-        let inner = self.inner.read().await;
-        Snapshot {
-            generated_at: Utc::now(),
-            providers: inner.providers.values().cloned().collect(),
+        self.inner.read().await.snapshot()
+    }
+
+    /// Adopt the display order from config.
+    ///
+    /// Broadcasts only when it actually changes, which is what makes it safe
+    /// to call from the same place as `Supervisor::sync` — that runs after
+    /// every config write, and most of those writes have nothing to do with
+    /// ordering.
+    pub async fn set_order(&self, order: Vec<String>) {
+        {
+            let mut inner = self.inner.write().await;
+            if inner.order == order {
+                return;
+            }
+            inner.order = order;
         }
+        // No alerts: nothing about a meter changed, only where it is drawn.
+        self.broadcast_current(Vec::new()).await;
     }
 
     /// Recent snapshots, oldest first, optionally trimmed to those after `since`.
@@ -112,10 +135,7 @@ impl Hub {
             inner.failures.insert(provider.id.clone(), 0);
             alerts = inner.alerts_for(&provider);
             inner.providers.insert(provider.id.clone(), provider);
-            let snap = Snapshot {
-                generated_at: Utc::now(),
-                providers: inner.providers.values().cloned().collect(),
-            };
+            let snap = inner.snapshot();
             inner.push_history(snap, self.history_cap);
         }
         self.broadcast_current(alerts).await;
@@ -149,10 +169,7 @@ impl Hub {
                 }
             }
 
-            let snap = Snapshot {
-                generated_at: Utc::now(),
-                providers: inner.providers.values().cloned().collect(),
-            };
+            let snap = inner.snapshot();
             inner.push_history(snap, self.history_cap);
         }
         self.broadcast_current(Vec::new()).await;
@@ -190,6 +207,36 @@ impl Hub {
 }
 
 impl Inner {
+    /// The tiles in display order: whatever `order` names, in that sequence,
+    /// then anything it does not, alphabetically.
+    ///
+    /// The fallback is not a formality. A provider polls and lands here the
+    /// moment the daemon starts, which can be before any order has been set,
+    /// and a tile missing from the list must still be drawn — the alternative
+    /// is a panel that silently omits a provider it is actively polling.
+    fn snapshot(&self) -> Snapshot {
+        let mut tiles: Vec<Provider> = Vec::with_capacity(self.providers.len());
+        for id in &self.order {
+            // `contains` guards a duplicated id, which `Config::reorder`
+            // normalises away — but a tile drawn twice is a nastier bug to
+            // read than this line is to keep.
+            if let Some(p) = self.providers.get(id) {
+                if !tiles.iter().any(|t| t.id == p.id) {
+                    tiles.push(p.clone());
+                }
+            }
+        }
+        for (id, p) in &self.providers {
+            if !self.order.contains(id) {
+                tiles.push(p.clone());
+            }
+        }
+        Snapshot {
+            generated_at: Utc::now(),
+            providers: tiles,
+        }
+    }
+
     fn push_history(&mut self, snap: Snapshot, cap: usize) {
         if cap == 0 {
             return;
@@ -263,6 +310,64 @@ mod tests {
             updated_at: Utc::now(),
             meters: vec![Meter::window("session", "5-hour", pct, None, Some(300))],
         }
+    }
+
+    fn named(id: &str) -> Provider {
+        Provider {
+            id: id.into(),
+            ..provider_at(10.0)
+        }
+    }
+
+    fn ids(snap: &Snapshot) -> Vec<String> {
+        snap.providers.iter().map(|p| p.id.clone()).collect()
+    }
+
+    #[tokio::test]
+    async fn tiles_come_out_in_the_order_the_user_arranged() {
+        let hub = Hub::new(10);
+        for id in ["claude", "codex", "openrouter"] {
+            hub.record(named(id)).await;
+        }
+        // Alphabetical until told otherwise — what a config that has never
+        // been dragged looks like.
+        assert_eq!(ids(&hub.snapshot().await), ["claude", "codex", "openrouter"]);
+
+        hub.set_order(vec!["openrouter".into(), "claude".into(), "codex".into()])
+            .await;
+        assert_eq!(ids(&hub.snapshot().await), ["openrouter", "claude", "codex"]);
+    }
+
+    #[tokio::test]
+    async fn a_tile_the_order_forgets_is_still_drawn() {
+        // The startup race: a provider polls and lands here before any order
+        // has been set, or one is added in another window. Dropping it would
+        // hide a provider the daemon is actively polling, which is the one
+        // outcome an ordering feature must never produce.
+        let hub = Hub::new(10);
+        hub.set_order(vec!["codex".into(), "gone".into()]).await;
+        for id in ["claude", "codex"] {
+            hub.record(named(id)).await;
+        }
+        assert_eq!(ids(&hub.snapshot().await), ["codex", "claude"]);
+    }
+
+    #[tokio::test]
+    async fn reordering_tells_the_viewers_but_only_when_it_changes() {
+        let hub = Hub::new(10);
+        hub.record(named("claude")).await;
+        let mut rx = hub.subscribe();
+
+        hub.set_order(vec!["claude".into()]).await;
+        assert!(
+            matches!(rx.try_recv(), Ok(Event::Snapshot(_))),
+            "a new order has to reach the open panels"
+        );
+
+        // Called after every config write, most of which are not reorders.
+        // Re-broadcasting on each would repaint the panel for nothing.
+        hub.set_order(vec!["claude".into()]).await;
+        assert!(rx.try_recv().is_err(), "an unchanged order was rebroadcast");
     }
 
     #[tokio::test]

@@ -126,6 +126,10 @@ pub async fn start(cfg: Config, bind_override: Option<String>) -> Result<Running
     {
         let cfg = state.config.read().await.clone();
         supervisor.sync(&cfg).await;
+        // Before the first poll lands, so the very first snapshot a viewer
+        // sees is already in the user's order.
+        hub.set_order(cfg.added().into_iter().map(str::to_string).collect())
+            .await;
     }
     // Not an error. An empty provider list is what a fresh install looks like,
     // and the panel's job in that state is to offer an "Add provider" button —

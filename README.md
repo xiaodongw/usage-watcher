@@ -220,6 +220,7 @@ being watched.
 
 ```toml
 version = 1               # written for you; see the migration note above
+order = ["codex", "claude"]   # panel order, as dragged; see below
 
 [daemon]
 bind = "127.0.0.1:7878"   # non-loopback requires `token`, or uwd refuses to start
@@ -239,6 +240,13 @@ auth = "delegated"        # reads the key `opencode auth login` stored
 enabled = false           # keep the credential, stop the polling — what you
                           # want while a provider is having an outage
 ```
+
+`order` appears once you drag a row in the provider list, and the panel's tiles
+follow it. It names ids only, and is advisory: an id it does not mention is
+shown after the ones it does, in alphabetical order, and an id that is no longer
+added is ignored. So a file written before ordering existed keeps the
+alphabetical order it always had, and mistyping an entry can move a provider but
+never hide one.
 
 Nothing secret is in there. Credentials go to the Windows Credential Manager,
 the macOS Keychain, or an owner-only `0600` file on Linux, and removing a

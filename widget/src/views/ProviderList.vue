@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 import { api } from "../lib/api";
 import { configured, mutate, providersError } from "../lib/providers";
 import type { ConfiguredProvider } from "../types/ConfiguredProvider";
@@ -11,6 +11,140 @@ const emit = defineEmits<{ close: []; add: []; settings: []; signIn: [id: string
 const confirming = ref<string | null>(null);
 const busy = ref<string | null>(null);
 const error = ref<string | null>(null);
+
+/**
+ * The order being shown, while it differs from the daemon's.
+ *
+ * `null` almost always: the list follows `configured`, which the daemon sends
+ * in the order it stores. It is only set while a drag is in flight and until
+ * the write that follows it comes back, so a `providers` event arriving from
+ * another window mid-drag cannot yank the rows out from under the pointer.
+ */
+const local = ref<ConfiguredProvider[] | null>(null);
+const rows = computed(() => local.value ?? configured.value);
+
+const list = ref<HTMLElement | null>(null);
+
+/** The row being dragged, how far it has been pulled, and where it would land. */
+const dragId = ref<string | null>(null);
+const dragY = ref(0);
+const dropAt = ref(-1);
+
+/**
+ * Row midpoints, measured once when the drag starts.
+ *
+ * Frozen on purpose. The obvious implementation reorders the array on every
+ * pointer move, but then the layout it is measuring against is the layout it
+ * just changed — and with rows of different heights (a "not signed in" note
+ * makes one taller) that feedback loop oscillates: the row swaps down, the
+ * shorter neighbour moves up under the pointer, and the next move swaps it
+ * straight back. Measuring a layout that is not moving cannot do that. The
+ * cost is that the other rows do not part to make room; an insertion line
+ * shows where the row will land instead.
+ */
+let midpoints: number[] = [];
+let grabbedAt = 0;
+let from = -1;
+
+function startDrag(event: PointerEvent, index: number) {
+  // Left button only; touch and pen report 0 here too.
+  if (event.button !== 0) return;
+  event.preventDefault();
+  const handle = event.currentTarget as HTMLElement;
+  // Without capture the drag dies the moment the pointer leaves the handle,
+  // which at 20px square is immediately.
+  handle.setPointerCapture(event.pointerId);
+
+  const boxes = Array.from(list.value?.querySelectorAll("li.row") ?? []);
+  midpoints = boxes.map((el) => {
+    const r = el.getBoundingClientRect();
+    return r.top + r.height / 2;
+  });
+  local.value = rows.value.slice();
+  from = index;
+  dragId.value = rows.value[index].id;
+  grabbedAt = event.clientY;
+  dragY.value = 0;
+  dropAt.value = index;
+  // A row half-way through a delete confirmation should not be draggable-with-
+  // a-question-open; the confirmation refers to a position that is moving.
+  confirming.value = null;
+  window.addEventListener("keydown", cancelOnEscape);
+}
+
+function onDrag(event: PointerEvent) {
+  if (dragId.value === null) return;
+  dragY.value = event.clientY - grabbedAt;
+  // How many rows the pointer has passed the middle of. That is the index the
+  // row would be inserted *before*, so it ranges 0..rows.length.
+  dropAt.value = midpoints.filter((m) => event.clientY > m).length;
+}
+
+function endDrag() {
+  if (dragId.value === null) return;
+  // Read before `reset`, which clears both. `dropAt` counts midpoints passed,
+  // so it is an insertion point in the *unmoved* list: dropping below your own
+  // row means one of the midpoints counted was your own.
+  const start = from;
+  const to = dropAt.value > start ? dropAt.value - 1 : dropAt.value;
+  const moved = local.value ?? [];
+  reset();
+  if (to === start || to < 0) {
+    local.value = null;
+    return;
+  }
+  void commit(move(moved, start, to));
+}
+
+function move(rows: ConfiguredProvider[], from: number, to: number): ConfiguredProvider[] {
+  const next = rows.slice();
+  const [row] = next.splice(from, 1);
+  next.splice(to, 0, row);
+  return next;
+}
+
+/** Escape, a lost pointer, or an unmount: put it back where it was. */
+function cancelDrag() {
+  if (dragId.value === null) return;
+  reset();
+  local.value = null;
+}
+
+function cancelOnEscape(event: KeyboardEvent) {
+  if (event.key === "Escape") cancelDrag();
+}
+
+function reset() {
+  dragId.value = null;
+  dropAt.value = -1;
+  dragY.value = 0;
+  from = -1;
+  window.removeEventListener("keydown", cancelOnEscape);
+}
+
+onBeforeUnmount(() => window.removeEventListener("keydown", cancelOnEscape));
+
+/**
+ * Move a row one place with the keyboard.
+ *
+ * A control you can only operate by dragging is one a keyboard cannot reach at
+ * all, and the handle is a button precisely so it can be tabbed to.
+ */
+function nudge(index: number, delta: number) {
+  const to = index + delta;
+  if (to < 0 || to >= rows.value.length) return;
+  void commit(move(rows.value, index, to));
+}
+
+async function commit(next: ConfiguredProvider[]) {
+  // Shown before it is saved: the drop has to feel instant, and the daemon's
+  // answer is the same list. `local` is cleared either way afterwards, so a
+  // rejected write snaps back to whatever the daemon actually has.
+  local.value = next;
+  const failed = await mutate(() => api.reorder(next.map((p) => p.id)));
+  error.value = failed;
+  local.value = null;
+}
 
 async function remove(p: ConfiguredProvider) {
   busy.value = p.id;
@@ -51,12 +185,41 @@ function describe(auth: AuthPreference): string {
 
     <p v-if="error ?? providersError" class="error">{{ error ?? providersError }}</p>
 
-    <p v-if="configured.length === 0" class="empty">
+    <p v-if="rows.length === 0" class="empty">
       Nothing is being watched yet. Press <strong>+</strong> to add a provider.
     </p>
 
-    <ul class="rows">
-      <li v-for="p in configured" :key="p.id" class="row">
+    <ul ref="list" class="rows">
+      <li
+        v-for="(p, i) in rows"
+        :key="p.id"
+        class="row"
+        :class="{
+          lifted: dragId === p.id,
+          'drop-above': dragId !== null && dropAt === i,
+          'drop-below': dragId !== null && dropAt === rows.length && i === rows.length - 1,
+        }"
+        :style="dragId === p.id ? { transform: `translateY(${dragY}px)` } : undefined"
+      >
+        <button
+          class="grip"
+          :title="`Reorder ${p.label}`"
+          :aria-label="`Reorder ${p.label}. Use the arrow keys to move it.`"
+          @pointerdown="startDrag($event, i)"
+          @pointermove="onDrag"
+          @pointerup="endDrag"
+          @pointercancel="cancelDrag"
+          @keydown.up.prevent="nudge(i, -1)"
+          @keydown.down.prevent="nudge(i, 1)"
+        >
+          <!-- Drawn rather than typed. The conventional glyph for this is
+               U+2833, and a machine whose font lacks it would render the whole
+               feature as a column of tofu. -->
+          <svg viewBox="0 0 10 16" aria-hidden="true">
+            <circle v-for="y in [4, 8, 12]" :key="`l${y}`" cx="3" :cy="y" r="1.15" />
+            <circle v-for="y in [4, 8, 12]" :key="`r${y}`" cx="7" :cy="y" r="1.15" />
+          </svg>
+        </button>
         <img class="icon" :src="p.icon" alt="" />
         <span class="name">
           <strong>{{ p.label }}</strong>
@@ -145,11 +308,78 @@ function describe(auth: AuthPreference): string {
 
 .row {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: auto auto 1fr auto auto;
   align-items: center;
   gap: 0.5rem;
   padding: 0.55rem 0.75rem;
   border-bottom: 1px solid var(--rule);
+  background: var(--bg);
+}
+
+/* The row under the pointer. `transform` rather than anything that reflows:
+   the drop position is measured against the layout as it was when the drag
+   started, so the layout must not move while it is being measured. */
+.row.lifted {
+  position: relative;
+  z-index: 1;
+  opacity: 0.85;
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 35%);
+}
+
+/* Where it would land. Since the other rows do not part to make room, this
+   line is the only thing that answers "where am I dropping this?" — so it is
+   drawn on the boundary itself rather than as a highlight on a neighbour,
+   which would read as "swap with that one". */
+.row.drop-above::before,
+.row.drop-below::after {
+  content: "";
+  position: absolute;
+  left: 0.5rem;
+  right: 0.5rem;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--fg-dim);
+}
+
+.row.drop-above,
+.row.drop-below {
+  position: relative;
+}
+
+.row.drop-above::before {
+  top: -1px;
+}
+
+.row.drop-below::after {
+  bottom: -1px;
+}
+
+.grip {
+  display: flex;
+  align-items: center;
+  padding: 0 0.1rem;
+  background: none;
+  border: none;
+  color: var(--fg-faint);
+  cursor: grab;
+  /* Or the first drag on a touchscreen scrolls the panel instead. */
+  touch-action: none;
+}
+
+.grip:hover,
+.grip:focus-visible {
+  color: var(--fg-dim);
+}
+
+.grip:active {
+  cursor: grabbing;
+}
+
+.grip svg {
+  width: 10px;
+  height: 16px;
+  fill: currentColor;
 }
 
 /* The vendor's own mark, from the manifest. Nothing tints, inverts or

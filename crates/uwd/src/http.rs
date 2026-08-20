@@ -56,7 +56,11 @@ pub fn router(state: AppState) -> Router {
         );
 
     let write = Router::new()
-        .route("/providers", get(api::list).post(api::add))
+        // `PUT /providers` rearranges the collection. Deliberately not
+        // `/providers/order`, which would sit in the same path slot as
+        // `/providers/{id}` and make the router's precedence rules load-bearing
+        // for no gain.
+        .route("/providers", get(api::list).post(api::add).put(api::reorder))
         .route("/providers/{id}", delete(api::remove))
         .route(
             "/providers/{id}/login",
@@ -70,7 +74,7 @@ pub fn router(state: AppState) -> Router {
         .layer(
             CorsLayer::new()
                 .allow_origin(AllowOrigin::predicate(|origin, _| is_app_origin(origin)))
-                .allow_methods([Method::GET, Method::POST, Method::DELETE])
+                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
                 .allow_headers([
                     axum::http::header::AUTHORIZATION,
                     axum::http::header::CONTENT_TYPE,

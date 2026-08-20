@@ -181,6 +181,23 @@ async fn an_unknown_provider_is_refused_before_anything_is_written() {
 }
 
 #[tokio::test]
+async fn rearranging_is_behind_the_token_too() {
+    // Reordering writes the config file. Cheaper to abuse than deleting a
+    // provider, and just as much a write.
+    let (status, _) = send(
+        app(Some("s3cret")),
+        Request::builder()
+            .method("PUT")
+            .uri("/providers")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"ids":["claude"]}"#))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn asking_about_a_login_nobody_started_is_a_404_not_a_hang() {
     assert_eq!(
         status_of(app(None), "/providers/claude/login", None).await,
@@ -223,6 +240,18 @@ async fn our_own_viewers_may_call_the_write_api() {
             "{origin} was refused"
         );
     }
+}
+
+#[tokio::test]
+async fn the_reorder_verb_is_granted_to_viewers_and_nobody_else() {
+    // PUT had to be added to the allowed methods when reordering arrived.
+    // Without this the drag would work in `vitest` and silently fail in the
+    // app, where the request is cross-origin and needs a preflight.
+    assert_eq!(
+        preflight("tauri://localhost", "PUT").await.as_deref(),
+        Some("tauri://localhost")
+    );
+    assert_eq!(preflight("https://example.com", "PUT").await, None);
 }
 
 #[tokio::test]

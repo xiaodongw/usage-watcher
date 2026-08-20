@@ -58,6 +58,14 @@ export const api = {
   add: (id: string, auth: AuthPreference) =>
     call<ProvidersView>("/providers", json({ id, auth })),
 
+  /**
+   * Persist the display order. The daemon normalises what it gets, so sending
+   * a list that has gone slightly stale reorders what it can rather than
+   * failing or dropping the provider it does not know about.
+   */
+  reorder: (ids: string[]) =>
+    call<ProvidersView>("/providers", { method: "PUT", body: JSON.stringify({ ids }) }),
+
   remove: (id: string) =>
     call<ProvidersView>(`/providers/${encodeURIComponent(id)}`, { method: "DELETE" }),
 

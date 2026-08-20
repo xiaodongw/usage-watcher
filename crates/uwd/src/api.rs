@@ -78,6 +78,18 @@ pub struct AddRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct OrderRequest {
+    /// Every added provider, in the order to display them.
+    ///
+    /// Taken as advice, not as gospel — [`uw_core::Config::reorder`] drops
+    /// what it does not recognise and appends what the caller left out. The
+    /// client sending this is a list that may be a few seconds stale, and a
+    /// provider added in another window between the drag and the drop must
+    /// not fall off the panel because this array predates it.
+    pub ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CodeRequest {
     pub session: String,
     pub code: String,
@@ -129,6 +141,32 @@ pub async fn add(
     {
         let mut cfg = st.config.write().await;
         cfg.add(&body.id, body.auth);
+        if let Err(e) = cfg.save() {
+            return fail(StatusCode::INTERNAL_SERVER_ERROR, e);
+        }
+    }
+    resync(&st).await;
+    respond_with_view(&st).await
+}
+
+/// Rearrange the panel.
+///
+/// Nothing about a provider changes here — no credential, no poll interval, no
+/// enablement — which is exactly why the order lives outside `ProviderConfig`:
+/// `resync` runs after this like it does after every write, and finds every
+/// poller's settings untouched, so dragging a row costs no vendor API calls.
+pub async fn reorder(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<Auth>,
+    Json(body): Json<OrderRequest>,
+) -> Response {
+    if let Err(r) = authorize(&st, &headers, &q) {
+        return r;
+    }
+    {
+        let mut cfg = st.config.write().await;
+        cfg.reorder(&body.ids);
         if let Err(e) = cfg.save() {
             return fail(StatusCode::INTERNAL_SERVER_ERROR, e);
         }
@@ -450,11 +488,21 @@ async fn begin_login(st: &AppState, id: &str) -> Result<LoginStarted> {
     })
 }
 
-/// Reconcile the pollers with config, then tell every viewer.
+/// Reconcile the pollers *and* the tile order with config, then tell every
+/// viewer.
+///
+/// Both, because both are derived from the same file and a caller that
+/// remembered one and forgot the other would leave the panel drawing tiles in
+/// an order the config screen no longer shows.
 async fn resync(st: &AppState) {
     let cfg = st.config.read().await.clone();
     st.supervisor.sync(&cfg).await;
+    st.hub.set_order(owned(cfg.added())).await;
     broadcast(st).await;
+}
+
+fn owned(ids: Vec<&str>) -> Vec<String> {
+    ids.into_iter().map(str::to_string).collect()
 }
 
 /// Restart one provider's poller, then tell every viewer.
@@ -499,10 +547,14 @@ async fn view(st: &AppState) -> Result<ProvidersView> {
 fn build_view(cfg: &Config) -> Result<ProvidersView> {
     let catalogue = Any::catalogue();
 
+    // `added()`, not `providers.iter()`: this list *is* the config screen's
+    // order, and it is the same call the tile order comes from, so the row you
+    // drag and the tile that moves can never disagree.
     let configured = cfg
-        .providers
-        .iter()
-        .filter_map(|(id, pc)| {
+        .added()
+        .into_iter()
+        .filter_map(|id| {
+            let pc = cfg.providers.get(id)?;
             // An id with no adapter is not an error worth failing the whole
             // screen over: it is what a config file from a newer build, or a
             // typo, looks like. Skipping it keeps the rest usable.
@@ -516,7 +568,7 @@ fn build_view(cfg: &Config) -> Result<ProvidersView> {
             };
             let info = adapter.info();
             Some(ConfiguredProvider {
-                id: id.clone(),
+                id: id.to_string(),
                 label: info.label,
                 icon: info.icon,
                 auth: pc.auth,

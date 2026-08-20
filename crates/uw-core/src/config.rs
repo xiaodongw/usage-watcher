@@ -33,6 +33,23 @@ pub struct Config {
     /// explicit.
     #[serde(default)]
     pub version: u32,
+    /// Display order, as the user dragged it. Ids only; the settings stay in
+    /// `providers`.
+    ///
+    /// Declared here, above `daemon`, because TOML requires every plain value
+    /// to precede the first table and `[daemon]` is one — not because it has
+    /// anything to do with the daemon.
+    ///
+    /// Kept out of [`ProviderConfig`] on purpose. The supervisor decides
+    /// whether to restart a poller by comparing that struct against what the
+    /// running task started with, so a position stored in it would make
+    /// dragging a row tear down its poller and re-poll the vendor. Reordering
+    /// a list must not cost an API call.
+    ///
+    /// Advisory, and absent until something is dragged: see [`Config::added`]
+    /// for what an empty or half-written list means.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub order: Vec<String>,
     #[serde(default)]
     pub daemon: DaemonConfig,
     /// The providers the user has added, keyed by adapter id.
@@ -258,8 +275,58 @@ impl Config {
     }
 
     /// Every added provider id, in display order.
+    ///
+    /// `order` is advisory and this is where that is enforced: ids in it that
+    /// are no longer added get skipped, and added ids it fails to mention
+    /// follow in the map's own alphabetical order. So a config file written
+    /// before ordering existed behaves exactly as it did — every id
+    /// unmentioned, so every id alphabetical — and a hand-edited `order` that
+    /// names two providers and forgets the rest still shows all of them.
+    ///
+    /// The one thing it cannot do is lose a provider, which is the property
+    /// worth having: a list you can reorder must never be a list you can
+    /// silently delete from by mistyping.
     pub fn added(&self) -> Vec<&str> {
-        self.providers.keys().map(String::as_str).collect()
+        let mut out: Vec<&str> = Vec::with_capacity(self.providers.len());
+        for id in &self.order {
+            if let Some((key, _)) = self.providers.get_key_value(id) {
+                let key = key.as_str();
+                if !out.contains(&key) {
+                    out.push(key);
+                }
+            }
+        }
+        for key in self.providers.keys() {
+            let key = key.as_str();
+            if !out.contains(&key) {
+                out.push(key);
+            }
+        }
+        out
+    }
+
+    /// Replace the display order with `ids`.
+    ///
+    /// Normalised on the way in rather than trusted: unknown ids dropped,
+    /// duplicates collapsed, and anything the caller left out appended in the
+    /// order it currently displays in. The result is a list that always names
+    /// every added provider exactly once, so what gets written to disk is
+    /// always a complete answer even when the caller sent a stale one — which
+    /// it will, the moment two config screens are open at once.
+    pub fn reorder(&mut self, ids: &[String]) {
+        let current: Vec<String> = self.added().into_iter().map(str::to_string).collect();
+        let mut next: Vec<String> = Vec::with_capacity(current.len());
+        for id in ids {
+            if self.providers.contains_key(id) && !next.contains(id) {
+                next.push(id.clone());
+            }
+        }
+        for id in current {
+            if !next.contains(&id) {
+                next.push(id);
+            }
+        }
+        self.order = next;
     }
 
     /// Add a provider, or do nothing if it is already there.
@@ -280,6 +347,11 @@ impl Config {
     /// Only the config entry: the caller is responsible for deleting the
     /// credential too, which lives in the token store rather than here.
     pub fn remove(&mut self, provider: &str) -> bool {
+        // Pruned rather than left to `added()` to skip: a stale id would also
+        // restore the old position if the provider were ever added back, and
+        // "removed, then added again" should land at the end like any other
+        // new provider rather than in a slot the user has since forgotten.
+        self.order.retain(|id| id != provider);
         self.providers.remove(provider).is_some()
     }
 
@@ -327,6 +399,123 @@ mod tests {
         assert!(c.remove("claude"));
         assert!(!c.remove("claude"));
         assert!(c.added().is_empty());
+    }
+
+    #[test]
+    fn without_an_order_the_list_is_alphabetical() {
+        // What every config file written before ordering existed looks like.
+        // Ordering had to be additive: nobody's panel may reshuffle because
+        // they upgraded.
+        let mut c = Config::fresh();
+        for id in ["openrouter", "claude", "opencode"] {
+            c.add(id, AuthPreference::Own);
+        }
+        assert!(c.order.is_empty());
+        assert_eq!(c.added(), vec!["claude", "opencode", "openrouter"]);
+    }
+
+    #[test]
+    fn reordering_puts_them_where_it_says() {
+        let mut c = Config::fresh();
+        for id in ["claude", "opencode", "openrouter"] {
+            c.add(id, AuthPreference::Own);
+        }
+        c.reorder(&["openrouter".into(), "claude".into(), "opencode".into()]);
+        assert_eq!(c.added(), vec!["openrouter", "claude", "opencode"]);
+    }
+
+    #[test]
+    fn a_partial_order_still_shows_every_provider() {
+        // A hand-edited file naming one provider, and the stale list a second
+        // config screen would send after the first added something. Neither
+        // may make a provider vanish from the panel.
+        let mut c = Config::fresh();
+        for id in ["claude", "codex", "opencode", "openrouter"] {
+            c.add(id, AuthPreference::Own);
+        }
+        c.order = vec!["openrouter".into()];
+
+        assert_eq!(c.added(), vec!["openrouter", "claude", "codex", "opencode"]);
+
+        // And normalising it writes the whole list down, so the next save is a
+        // complete answer rather than the same partial one.
+        c.reorder(&["openrouter".into()]);
+        assert_eq!(c.order.len(), 4);
+        assert_eq!(c.added(), vec!["openrouter", "claude", "codex", "opencode"]);
+    }
+
+    #[test]
+    fn an_order_naming_junk_is_ignored_rather_than_obeyed() {
+        let mut c = Config::fresh();
+        c.add("claude", AuthPreference::Own);
+        c.add("codex", AuthPreference::Own);
+        // A provider removed while another viewer held a stale list, a typo,
+        // and a duplicate.
+        c.reorder(&[
+            "openrouter".into(),
+            "codex".into(),
+            "cluade".into(),
+            "codex".into(),
+        ]);
+
+        assert_eq!(c.added(), vec!["codex", "claude"]);
+        assert_eq!(c.order, vec!["codex".to_string(), "claude".to_string()]);
+    }
+
+    #[test]
+    fn a_new_provider_joins_the_end_rather_than_the_middle() {
+        // Alphabetically "codex" belongs second. Once the user has arranged
+        // the list by hand, though, an addition dropping into the middle of
+        // their arrangement would look like the app rearranging it.
+        let mut c = Config::fresh();
+        for id in ["claude", "opencode", "openrouter"] {
+            c.add(id, AuthPreference::Own);
+        }
+        c.reorder(&["openrouter".into(), "opencode".into(), "claude".into()]);
+
+        c.add("codex", AuthPreference::Own);
+        assert_eq!(c.added(), vec!["openrouter", "opencode", "claude", "codex"]);
+    }
+
+    #[test]
+    fn removing_forgets_the_position_too() {
+        let mut c = Config::fresh();
+        for id in ["claude", "codex"] {
+            c.add(id, AuthPreference::Own);
+        }
+        c.reorder(&["codex".into(), "claude".into()]);
+        c.remove("codex");
+        assert!(!c.order.contains(&"codex".to_string()));
+
+        // Back at the end, like anything else just added.
+        c.add("codex", AuthPreference::Own);
+        assert_eq!(c.added(), vec!["claude", "codex"]);
+    }
+
+    #[test]
+    fn the_order_round_trips_through_toml() {
+        let mut c = Config::fresh();
+        for id in ["claude", "codex"] {
+            c.add(id, AuthPreference::Own);
+        }
+        c.reorder(&["codex".into(), "claude".into()]);
+
+        let text = toml::to_string_pretty(&c).unwrap();
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(back.added(), vec!["codex", "claude"]);
+
+        // The array has to precede `[daemon]` and `[providers]`, or TOML
+        // refuses to serialise it at all.
+        assert!(text.find("order").unwrap() < text.find("[daemon]").unwrap());
+    }
+
+    #[test]
+    fn an_untouched_config_writes_no_order_at_all() {
+        // `skip_serializing_if`: the file is hand-edited, and a line saying
+        // `order = []` invites someone to wonder what it does.
+        let mut c = Config::fresh();
+        c.add("claude", AuthPreference::Own);
+        assert!(!toml::to_string_pretty(&c).unwrap().contains("order"));
     }
 
     #[test]
