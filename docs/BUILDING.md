@@ -478,6 +478,16 @@ with `UWD_LOG=debug` and read the first few lines: the usual causes are a
 this machine does not have. It falls back to an ephemeral port when the
 configured one is merely busy, so "port in use" is not one of them.
 
+**Signing in to Codex on Windows fails with "longer than platform limit of
+2560 chars"** — fixed, but worth knowing what it was. The Windows Credential
+Manager caps one credential blob at 2560 bytes and measures the value as UTF-16,
+so an ASCII payload gets about 1280 characters. A Codex credential is a ChatGPT
+JWT plus a refresh token, roughly three kilobytes, and did not fit; Claude and
+OpenRouter have short tokens and were unaffected. Oversized credentials are now
+split across numbered entries (`codex`, `codex#0`, `codex#1`, …), which is why
+you may see several per provider in the Credential Manager. Nothing to do about
+it, and entries written before the split still load as they are.
+
 **Two copies of everything, or every provider polled twice** — a second
 collector is running. The app probes `/health` on the configured port before
 starting its own and defers to whatever answers, but a `uwd` bound somewhere

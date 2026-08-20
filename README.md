@@ -200,6 +200,12 @@ Credentials go to the OS keychain on macOS and Windows, and to an owner-only
 dependency there at all. Nothing secret is ever written to `config.toml` or
 served over HTTP.
 
+Windows caps one credential at 2560 bytes and counts them as UTF-16, which a
+Codex credential — a ChatGPT JWT plus a refresh token — exceeds. Those are split
+across numbered entries (`codex`, `codex#0`, `codex#1`, …), so a provider may
+occupy several rows in the Credential Manager. macOS and Linux have no such
+limit and store one entry each.
+
 ## Configuration
 
 `~/.config/usage-watcher/config.toml` — written by the config screen as well as
