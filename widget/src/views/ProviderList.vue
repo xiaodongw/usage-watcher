@@ -242,9 +242,28 @@ function describe(auth: AuthPreference): string {
           class="trash"
           :disabled="busy === p.id"
           :title="`Remove ${p.label}`"
+          :aria-label="`Remove ${p.label}`"
           @click="askRemove(p)"
         >
-          🗑
+          <!-- Drawn, like the grip above, and for the same reason: this was
+               U+1F5D1 until a machine without an emoji font rendered the whole
+               column as tofu. -->
+          <svg viewBox="0 0 14 16" aria-hidden="true">
+            <path
+              d="M2 4h10v10a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 2 14V4Zm3.5 2.5v7m3-7v7"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.3"
+              stroke-linecap="round"
+            />
+            <path
+              d="M0.5 3h13M5 3V1.5A1 1 0 0 1 6 .5h2a1 1 0 0 1 1 1V3"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.3"
+              stroke-linecap="round"
+            />
+          </svg>
         </button>
 
         <!-- The note explains an unusable mode: delegated with no vendor CLI
@@ -462,11 +481,17 @@ button {
 }
 
 .trash {
+  display: flex;
+  align-items: center;
   background: none;
   border: none;
   color: var(--fg-faint);
-  font-size: 0.85rem;
   padding: 0 0.2rem;
+}
+
+.trash svg {
+  width: 14px;
+  height: 16px;
 }
 
 .trash:hover {
