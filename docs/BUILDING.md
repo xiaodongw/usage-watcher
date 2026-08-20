@@ -1,0 +1,415 @@
+# Building
+
+Seven things can be built out of this repo, and no single machine can build all
+of them. This is what each one needs, and where it has to be built.
+
+- [What builds where](#what-builds-where)
+- [Common to everything](#common-to-everything)
+- [Linux and WSL](#linux-and-wsl)
+- [Windows](#windows)
+- [macOS](#macos)
+- [Android](#android)
+- [iOS](#ios)
+- [GNOME extension](#gnome-extension)
+- [Release builds](#release-builds)
+- [Troubleshooting](#troubleshooting)
+
+## What builds where
+
+| target | Linux / WSL | Windows | macOS | needs |
+|---|:---:|:---:|:---:|---|
+| `uw` (CLI) | ✅ | ✅ | ✅ | Rust only |
+| `uwd` (daemon) | ✅ | ✅ | ✅ | Rust only |
+| widget in a browser | ✅ | ✅ | ✅ | Node only |
+| Tauri desktop app | ⚠️ | ✅ | ✅ | platform webview toolchain |
+| Android app | ✅ | ✅ | ✅ | JDK + Android SDK + NDK |
+| iOS app | ❌ | ❌ | ✅ | Xcode — no cross-compiling, ever |
+| GNOME extension | ✅ | ❌ | ❌ | `glib-compile-schemas`, and a GNOME session to run it |
+
+⚠️ The Tauri app *does* build on Linux, but under WSLg the tray behaviour is not
+representative of a real desktop. Linux users want the GNOME extension instead.
+
+Two things follow from this table and are worth internalising before you start:
+
+**The daemon and the UI do not have to be on the same machine.** `uwd` belongs
+wherever the credentials and the vendor CLIs are — inside WSL, in the usual
+setup — and every viewer reads it over HTTP. So you build `uwd` once in WSL and
+the widget natively on Windows, and they talk over `localhost` because WSL2
+forwards it.
+
+**`widget/src-tauri` is deliberately not a workspace member.** The root
+`Cargo.toml` excludes it. That is what keeps `cargo test --workspace` green on a
+machine with no webview toolchain, which is most of them. It also means
+`cargo build` at the root never builds the app — you go through `npm run
+app:build`, which invokes its own Cargo workspace.
+
+## Common to everything
+
+**Rust 1.82 or newer**, via [rustup](https://rustup.rs). The workspace pins
+`rust-version = "1.82"`; anything newer is fine.
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # not Windows
+rustc --version
+```
+
+**Node 20 LTS or newer**, for anything involving `widget/`. Vite 6 and
+`vue-tsc` need it; nothing else in the repo does.
+
+The CLI and the daemon need nothing else on any platform:
+
+```sh
+cargo build --release -p uw-cli -p uwd
+cargo install --path crates/uw-cli     # puts `uw` on PATH
+```
+
+There is no C toolchain requirement hiding in there. TLS is `rustls`, not
+OpenSSL, and the Linux credential store is a plain 0600 file rather than
+`keyring` — see [Credential storage](#credential-storage) below for why that
+matters to your package list.
+
+### Credential storage
+
+`uw-core` picks its store by target, and this is the one place where an
+innocuous-looking dependency would change what you must install:
+
+| target | store | build dependency |
+|---|---|---|
+| macOS, iOS | Keychain | none (`keyring` with `apple-native`) |
+| Windows | Credential Manager | none (`keyring` with `windows-native`) |
+| Linux, WSL, Android | 0600 file under `$XDG_DATA_HOME` | **none** |
+
+Linux deliberately does *not* use `keyring`. The Secret Service backend needs
+D-Bus and `libdbus-1-dev`, and WSL runs no Secret Service daemon at all — a
+keychain-only design would simply fail to start there. So there is no
+`libdbus-1-dev` in any package list below, and that is on purpose.
+
+## Linux and WSL
+
+### CLI and daemon
+
+Nothing beyond Rust:
+
+```sh
+cargo build --release -p uw-cli -p uwd
+```
+
+### Widget in a browser
+
+```sh
+npm --prefix widget install
+npm --prefix widget run dev          # http://localhost:5173
+```
+
+Under WSL this is reachable from a Windows browser with no configuration —
+WSL2 forwards `localhost`. It is the fastest way to see a UI change, and it is
+the same Vue app the native shells host.
+
+### Tauri desktop app (possible, not recommended)
+
+```sh
+sudo apt update
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+                 libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+Fedora:
+
+```sh
+sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file \
+                 libappindicator-gtk3-devel librsvg2-devel libxdo-devel
+sudo dnf group install "c-development"
+```
+
+Arch:
+
+```sh
+sudo pacman -S --needed webkit2gtk-4.1 base-devel curl wget file openssl \
+                        appmenu-gtk-module libappindicator-gtk3 librsvg xdotool
+```
+
+Then:
+
+```sh
+npm --prefix widget run app:dev
+```
+
+`libwebkit2gtk-4.1-dev` is the one that actually matters; without it the build
+fails at `pkg-config` before compiling anything. Check for it with:
+
+```sh
+pkg-config --exists webkit2gtk-4.1 && echo present || echo missing
+```
+
+On a real GNOME desktop, prefer the [extension](#gnome-extension). The tray this
+app draws is a `libayatana-appindicator` item, which GNOME renders as a menu
+with no live figure in the top bar — which is the point of the thing.
+
+## Windows
+
+This is the intended home for the tray widget. The daemon stays in WSL.
+
+### Prerequisites
+
+1. **[Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)**
+   with the **Desktop development with C++** workload. Rust's `stable-msvc`
+   toolchain needs the MSVC linker; this is not optional and not small.
+2. **[rustup](https://win.rustup.rs)** — the defaults are right
+   (`stable-x86_64-pc-windows-msvc`).
+3. **[Node LTS](https://nodejs.org)**.
+4. **WebView2 runtime** — already present on Windows 11 and on Windows 10 since
+   version 1803. Only needed on genuinely old installs.
+5. **VBSCRIPT**, a Windows optional feature, if you want the `.msi` installer.
+   Enabled by default; only worth knowing about if someone turned it off.
+
+### Get the source onto a Windows drive
+
+Building across `\\wsl.localhost` works but is slow enough to be unpleasant —
+every file read crosses the 9p filesystem, and Cargo reads a great many files.
+
+```powershell
+git clone \\wsl.localhost\Ubuntu\home\xiaodong\work\usage-watcher C:\dev\usage-watcher
+```
+
+That clone is an ordinary git remote, so `git pull` there picks up commits made
+on the WSL side.
+
+### Build and run
+
+```sh
+cargo run -p uwd            # in WSL, where the credentials are
+```
+
+```powershell
+cd C:\dev\usage-watcher\widget
+npm install
+npm run app:dev             # or: npm run app:build
+```
+
+Nothing to configure: WSL2 forwards `localhost`, so a daemon bound to
+`127.0.0.1:7878` inside WSL answers on `localhost:7878` from Windows. If that
+stops working, see [Troubleshooting](#troubleshooting).
+
+### Icon
+
+The repo ships a placeholder. Replace it when you have a real one — this
+generates every size and format Windows, macOS and Linux each want:
+
+```powershell
+npm run tauri icon path\to\icon.png
+```
+
+## macOS
+
+```sh
+xcode-select --install                 # Command Line Tools are enough for this
+brew install rustup node               # if you have neither
+```
+
+Full Xcode is **only** needed for [iOS](#ios). Desktop builds are happy with the
+Command Line Tools. macOS 10.15 or later.
+
+```sh
+npm --prefix widget install
+npm --prefix widget run app:dev        # or: app:build
+```
+
+It launches as a menu-bar accessory — no Dock icon, no app-switcher entry. That
+is set in two places on purpose, and both are needed:
+
+- `set_activation_policy(Accessory)` in `src-tauri/src/lib.rs` covers
+  `tauri dev`, which does not bundle and so never reads a plist.
+- `LSUIElement` in `src-tauri/Info.plist` covers the shipped `.app`, from its
+  very first launch, before any Rust has run.
+
+Universal binary for both Apple Silicon and Intel:
+
+```sh
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+npm run tauri build -- --target universal-apple-darwin
+```
+
+Unsigned builds are fine for yourself. Distributing to anyone else means an
+Apple Developer account, a Developer ID certificate and notarisation, none of
+which this repo sets up.
+
+## Android
+
+Buildable from Linux, macOS or Windows — the SDK is cross-platform. What is
+*not* cross-platform is iOS, so a Mac is the only machine that can produce both.
+
+### Prerequisites
+
+1. **[Android Studio](https://developer.android.com/studio)**. Easiest source
+   of all four pieces below; you never have to open the IDE.
+2. In **SDK Manager**, install:
+   - Android SDK Platform (a recent API level)
+   - Android SDK Platform-Tools
+   - Android SDK Build-Tools
+   - Android SDK Command-line Tools
+   - **NDK (Side by side)** — the one people forget, and the one whose absence
+     surfaces ten minutes into a Gradle sync
+3. **A JDK 17 or newer.** Android Studio bundles one (JetBrains Runtime); point
+   `JAVA_HOME` at it or install your own.
+4. **Environment variables.** Nothing works without these three:
+
+   ```sh
+   # ~/.zshrc or ~/.bashrc — adjust for your install
+   export JAVA_HOME="/opt/android-studio/jbr"
+   export ANDROID_HOME="$HOME/Android/Sdk"
+   export NDK_HOME="$ANDROID_HOME/ndk/$(ls -1 "$ANDROID_HOME/ndk" | tail -1)"
+   ```
+
+   On Windows, set them in *System Properties → Environment Variables*;
+   `ANDROID_HOME` is typically `%LOCALAPPDATA%\Android\Sdk`.
+
+5. **Rust targets** — `mobile.sh` adds these for you, but for the record:
+
+   ```sh
+   rustup target add aarch64-linux-android armv7-linux-androideabi \
+                     i686-linux-android x86_64-linux-android
+   ```
+
+### Build
+
+```sh
+cd widget
+./mobile.sh android init      # once — generates src-tauri/gen/android
+./mobile.sh android dev       # device attached, or an emulator running
+./mobile.sh android build     # .apk / .aab
+```
+
+The script checks all of the above **before** starting, because a missing NDK
+otherwise announces itself as a Gradle error with no mention of the NDK.
+
+`mobile.sh` is bash, so on Windows run it from **Git Bash or WSL**, or skip it
+and call the CLI directly from PowerShell — you then get none of the
+preflight checks, which is exactly when the NDK error above turns up:
+
+```powershell
+npm run tauri android init
+npm run tauri android dev
+```
+
+`src-tauri/gen/android` is gitignored on purpose: the generated Gradle project
+records SDK versions and absolute toolchain paths from the machine that ran
+`init`, so a committed copy is wrong everywhere else. Re-run `init` per machine.
+
+For `dev` against a physical device, the phone loads the Vite dev server over
+the network. Tauri sets `TAURI_DEV_HOST` and `vite.config.ts` already honours
+it — the phone and the computer just have to be on the same network.
+
+## iOS
+
+**macOS only.** There is no cross-compiling this; Xcode does not exist for other
+platforms and the toolchain cannot be reproduced.
+
+### Prerequisites
+
+1. **Full Xcode** from the App Store — not just the Command Line Tools, which
+   are enough for the desktop build but cannot drive an Xcode project.
+2. **Cocoapods**: `brew install cocoapods`. Tauri generates a `Podfile`; without
+   `pod` the first build fails part-way through with an unhelpful message.
+3. **Rust targets** (again, `mobile.sh` handles it):
+
+   ```sh
+   rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+   ```
+
+   `aarch64-apple-ios-sim` is the simulator on Apple Silicon;
+   `x86_64-apple-ios` is the simulator on an Intel Mac.
+
+### Build
+
+```sh
+cd widget
+./mobile.sh ios init
+./mobile.sh ios dev
+./mobile.sh ios build
+```
+
+The simulator needs no account. A **physical device** needs a signing team —
+a free Apple ID works for a 7-day provisioning profile, which is enough to try
+it — configured in the generated Xcode project under `src-tauri/gen/ios`.
+
+## GNOME extension
+
+No compiler and no build step. The only tool needed is the schema compiler:
+
+```sh
+sudo apt install libglib2.0-dev-bin      # Debian/Ubuntu
+sudo dnf install glib2-devel             # Fedora
+```
+
+Then:
+
+```sh
+gnome-extension/install.sh
+gnome-extensions enable usage-watcher@usagewatcher.dev
+```
+
+Requires **GNOME Shell 45 or newer**, which is where extensions moved to ES
+modules. Check with `gnome-shell --version`. After installing, restart the
+shell: on X11 press <kbd>Alt</kbd>+<kbd>F2</kbd> and type `r`; on **Wayland you
+must log out and back in**, because the shell cannot reload itself in place —
+and <kbd>Alt</kbd>+<kbd>F2</kbd> there silently does nothing, which is an easy
+hour to lose.
+
+## Release builds
+
+```sh
+cargo build --release -p uw-cli -p uwd          # any platform
+npm --prefix widget run app:build               # native installer for the host
+npm --prefix widget run android:build           # .apk / .aab
+npm --prefix widget run ios:build               # .ipa, macOS only
+```
+
+`app:build` produces whatever is native to the host — `.msi` and `.exe` on
+Windows, `.dmg` and `.app` on macOS, `.deb`/`.rpm`/`.AppImage` on Linux. There
+is no cross-compiling between desktop platforms either: each installer must be
+built on its own OS.
+
+## Troubleshooting
+
+**`pkg-config` cannot find `webkit2gtk-4.1`** — the Linux Tauri dependencies are
+missing. See [Linux and WSL](#linux-and-wsl). Note it is `4.1`, not `4.0`;
+Tauri v1 used the older one and a stale guide will send you to the wrong
+package.
+
+**`linker 'cc' not found` on Windows** — the C++ workload of the Visual Studio
+Build Tools was not installed, only the installer itself.
+
+**Gradle fails with no obvious cause** — almost always `NDK_HOME` unset or
+pointing at a version that has been removed. `./mobile.sh android init` checks
+this up front; if you invoked `tauri android` directly, it does not.
+
+**`cargo test --workspace` tries to build the Tauri app** — it should not; the
+root `Cargo.toml` excludes `widget/src-tauri`. If it does, you are running
+Cargo from inside `widget/src-tauri`, which is its own workspace.
+
+**The panel says *Cannot reach uwd* but `curl` inside WSL works** — WSL2
+localhost forwarding has broken, which happens after some Windows updates and
+VPN changes. Bind the daemon to the WSL interface instead, which it refuses to
+do unauthenticated:
+
+```toml
+[daemon]
+bind = "0.0.0.0:7878"
+token = "pick-something-long"
+```
+
+Then set that address and token in the panel's gear menu. `<wsl-ip>` is what
+`hostname -I` prints inside WSL — it changes on every WSL restart, which is the
+main reason to prefer localhost forwarding. You must **also** add that origin to
+`connect-src` in `widget/src-tauri/tauri.conf.json`: the webview's CSP names the
+daemons it may talk to, and an unlisted one is blocked before a request leaves.
+
+**A GNOME extension that will not enable** — the shell disables an extension
+that throws during `enable()` and records why:
+
+```sh
+journalctl -f -o cat /usr/bin/gnome-shell
+```
+
+A daemon that is not running is *not* one of those cases; it shows as "Cannot
+reach uwd" and keeps retrying.

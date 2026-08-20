@@ -25,6 +25,9 @@ uwd ──/snapshot + /events (SSE) ──┼─ GNOME extension (Linux)
  └── Claude · Codex · opencode · OpenRouter
 ```
 
+Build prerequisites for every target and host are in
+[docs/BUILDING.md](docs/BUILDING.md).
+
 ## Quick start
 
 ```sh
@@ -219,17 +222,21 @@ or critical, not one per poll for the next four hours.
 
 ## Viewers
 
-One Vue app, four shells. It runs in a plain browser too — `npm --prefix widget
-run dev` is enough to see live data — and that is the fastest way to check a
-change before building anything native.
+One Vue app, four shells, plus a native one for Linux. It runs in a plain
+browser too — `npm --prefix widget run dev` — and that is the fastest way to
+check a change before building anything native.
 
 | shell | what it adds | build |
 |---|---|---|
 | browser | nothing; the panel as-is | `npm --prefix widget run dev` |
-| Windows tray | tray icon, frameless popover, notifications, start at login | `npm run app:build` on Windows |
-| macOS menu bar | the same, plus no Dock icon and the figure in the menu bar | `npm run app:build` on macOS |
+| Windows tray | tray icon, frameless popover, notifications, start at login | `npm run app:build` |
+| macOS menu bar | the same, plus no Dock icon and the figure in the menu bar | `npm run app:build` |
 | Android / iOS | full-screen panel, daemon address set in-app | `./mobile.sh <platform> build` |
 | GNOME | native panel indicator, no webview at all | `gnome-extension/install.sh` |
+
+**Prerequisites, per platform and per target, are in
+[docs/BUILDING.md](docs/BUILDING.md)** — SDKs, system packages, environment
+variables, and which combinations are impossible (iOS off a Mac, chiefly).
 
 The daemon address is a **runtime** setting — the gear in the header — stored
 per install. `VITE_UWD_URL` and `VITE_UWD_TOKEN` still work, but they are only
@@ -237,16 +244,16 @@ the initial default now. That change is what makes the phone builds possible:
 the same signed binary has to reach a daemon whose address the user only learns
 after installing it.
 
-### Windows and macOS (the tray shells)
+### The tray shells
 
-Both are the same Tauri app; the platform differences are in
-`widget/src-tauri/src/tray.rs` and amount to a dozen lines.
+Windows and macOS are the same Tauri app; the differences amount to a dozen
+lines in `widget/src-tauri/src/tray.rs`.
 
 Clicking the tray icon toggles the panel, which opens next to the icon — above
 it or below it depending on where the taskbar or menu bar actually is, rather
 than assuming. Clicking away dismisses it, the way every tray popover does.
 Closing the panel does not quit: the tray icon is the entry point, and a second
-launch just reveals the existing window instead of starting a rival copy.
+launch reveals the existing window instead of starting a rival copy.
 
 The tray carries the most-constrained figure so it can be read without opening
 anything — macOS beside the menu-bar icon, Windows in the hover tooltip, each
@@ -257,114 +264,11 @@ building it needs the platform webview toolchain, which a WSL checkout usually
 lacks, and keeping it out means `cargo test` at the repo root stays green
 everywhere.
 
-#### On Windows
+### The phone is a viewer, not a collector
 
-The daemon stays in WSL — it is where the credentials and vendor CLIs live. Only
-the widget is built natively.
-
-1. **Toolchain**, once:
-   - [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-     with the *Desktop development with C++* workload — Rust's MSVC target needs
-     the linker.
-   - [rustup](https://win.rustup.rs) (defaults are right: `stable-msvc`).
-   - [Node LTS](https://nodejs.org).
-   - WebView2 runtime — already present on Windows 11 and updated Windows 10.
-
-2. **Get the source onto a Windows drive.** Building across `\\wsl.localhost`
-   works but is slow enough to be unpleasant, because every file read crosses
-   the 9p filesystem:
-
-   ```powershell
-   git clone \\wsl.localhost\Ubuntu\home\xiaodong\work\usage-watcher C:\dev\usage-watcher
-   ```
-
-   That clone is a normal git remote, so `git pull` there picks up commits made
-   on the WSL side.
-
-3. **Run it** — daemon in WSL, widget on Windows:
-
-   ```sh
-   cargo run -p uwd          # in WSL
-   ```
-   ```powershell
-   cd C:\dev\usage-watcher\widget
-   npm install
-   npm run app:dev
-   ```
-
-   Nothing to configure: WSL2 forwards `localhost`, so a daemon bound to
-   `127.0.0.1:7878` inside WSL answers on `localhost:7878` from Windows.
-
-4. **Replace the placeholder icon** when you have a real one:
-
-   ```powershell
-   npm run tauri icon path\to\icon.png
-   ```
-
-#### On macOS
-
-```sh
-brew install rustup node       # if you have neither
-npm --prefix widget install
-npm --prefix widget run app:dev
-```
-
-It launches as a menu-bar accessory: no Dock icon, no app-switcher entry, no
-menu bar of its own. That is set twice on purpose —
-`set_activation_policy` in `lib.rs` covers `tauri dev`, and `LSUIElement` in
-`src-tauri/Info.plist` covers the shipped bundle from its first launch, before
-any Rust has run.
-
-The tray icon is drawn as a macOS *template*, so it takes the menu bar's own
-colour and stays legible in both light and dark.
-
-#### If WSL localhost forwarding is not working
-
-It occasionally breaks after a Windows update or a VPN change. Symptom: the
-panel says *Cannot reach uwd* while `curl` inside WSL is fine. Then bind the
-daemon to the WSL interface instead — which it will not do unauthenticated:
-
-```toml
-[daemon]
-bind = "0.0.0.0:7878"
-token = "pick-something-long"
-```
-
-and set that address in the panel's gear menu. `<wsl-ip>` is what `hostname -I`
-prints inside WSL; it changes on every WSL restart, which is the main reason to
-prefer localhost forwarding. You must also add that origin to `connect-src` in
-`widget/src-tauri/tauri.conf.json` — the webview's CSP names the daemons it may
-talk to, and an unlisted one is blocked before a request is sent.
-
-### Android and iOS
-
-```sh
-cd widget
-./mobile.sh android init     # once, generates src-tauri/gen/android
-./mobile.sh android dev      # with a device attached or an emulator running
-```
-
-`ios` in place of `android`, on a Mac. The script checks the toolchain up front
-and adds the Rust targets, because finding out about a missing NDK ten minutes
-into a Gradle sync is a bad way to spend an evening. `src-tauri/gen/` is
-gitignored: the generated Gradle and Xcode projects bake in SDK versions and
-absolute paths from the machine that produced them.
-
-Needed first — none of it is optional, and none of it can be installed by this
-repo:
-
-- **Android**: a JDK 17+, the Android SDK and the NDK, with `JAVA_HOME`,
-  `ANDROID_HOME` and `NDK_HOME` set. Android Studio installs all three.
-- **iOS**: macOS with Xcode. There is no cross-compiling this from Linux.
-
-On a phone the panel fills the screen, keeps clear of the notch and the home
-indicator, and scrolls. The first thing to do after installing is open the gear
-and set the daemon address.
-
-**The phone is a viewer, not a collector.** It reads a daemon you are already
-running — over Tailscale, in practice, which is also the only sane way to expose
-`uwd` beyond loopback. It does **not** poll the providers itself, so it needs no
-credentials on the device.
+It reads a daemon you are already running — over Tailscale, in practice, which
+is also the only sane way to expose `uwd` beyond loopback. It does **not** poll
+the providers itself, so it needs no credentials on the device.
 
 That is a deliberate stopping point rather than an oversight. Polling on-device
 is what the own-grant OAuth work was for and `uw-core` is already portable
@@ -373,26 +277,13 @@ that does not assume a loopback redirect, and a way to test both — none of whi
 exist yet. Until then the phone reaches the daemon, and the daemon holds the
 secrets.
 
-### Linux
+### Linux gets an extension, not the widget
 
 GNOME dropped the system tray, and the `AppIndicator` shim that replaced it
 gives a menu but no live figure in the top bar — which is the whole point. So
-Linux gets a real panel indicator instead of a webview pretending to be one:
-
-```sh
-gnome-extension/install.sh
-```
-
+Linux gets a real panel indicator instead of a webview pretending to be one.
 See [`gnome-extension/README.md`](gnome-extension/README.md). It is plain GJS,
 needs no build step, and like every other viewer holds no credentials.
-
-Building the Tauri shell on Linux is possible but not the intended path. It
-needs, first:
-
-```sh
-sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-                 librsvg2-dev libxdo-dev pkg-config build-essential
-```
 
 ## Types
 

@@ -40,8 +40,14 @@ case "$PLATFORM" in
     ;;
   ios)
     [ "$(uname -s)" = "Darwin" ] || fail "iOS can only be built on macOS — Xcode is required and does not exist elsewhere"
-    command -v xcodebuild >/dev/null || fail "xcodebuild not found — install Xcode and run: xcode-select --install"
-    for t in aarch64-apple-ios aarch64-apple-ios-sim; do
+    # The Command Line Tools alone are enough for the desktop build but not for
+    # this one: `tauri ios` drives a real Xcode project.
+    command -v xcodebuild >/dev/null || fail "xcodebuild not found — install the full Xcode, not just the Command Line Tools"
+    # Tauri generates a Podfile, so a missing pod only shows up as a confusing
+    # failure part-way through the first build.
+    command -v pod >/dev/null || fail "cocoapods not found — brew install cocoapods"
+    # x86_64 is the Intel simulator, still needed on an Intel Mac.
+    for t in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
       rustup target list --installed | grep -qx "$t" || {
         echo "adding rust target $t"
         rustup target add "$t"
