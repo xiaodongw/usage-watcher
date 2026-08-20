@@ -83,9 +83,22 @@ impl Session {
     }
 
     pub fn set(&self, phase: Phase) {
-        // Fails only when nobody is watching, which is the normal case for a
-        // login nobody has polled yet.
-        let _ = self.phase.send(phase);
+        // `send_replace`, emphatically not `send`.
+        //
+        // `watch::Sender::send` returns `Err` when every receiver has been
+        // dropped — and, crucially, *does not store the value*. Nothing here
+        // holds a long-lived receiver: `opened()` subscribes, waits for the URL
+        // and drops its own, and the status endpoint only ever `borrow`s. So
+        // every phase written after that first one — `Done`, `Failed`, all of
+        // them — was silently discarded, and the session sat on `Waiting`
+        // forever no matter what the login actually did.
+        //
+        // That is exactly what a completed browser sign-in looked like from the
+        // panel: the provider signed in, the poller restarted, and the screen
+        // went on saying "Waiting for the browser…" because the only thing it
+        // could read still said so. `send_replace` always stores, and still
+        // wakes any receiver that happens to exist.
+        self.phase.send_replace(phase);
     }
 
     pub fn watch(&self) -> watch::Receiver<Phase> {
@@ -220,22 +233,51 @@ struct Entry {
 // avoids a race between the task finishing and `install` recording it.
 
 impl Logins {
-    /// Register a running login, replacing and cancelling any previous attempt
-    /// at the same provider.
+    /// Register a running login, replacing any finished attempt at the same
+    /// provider.
     ///
-    /// Replacing rather than refusing: a user who closed the browser tab and
-    /// clicked "Sign in" again is asking for a new attempt, not an error, and
-    /// the old task would otherwise sit on its loopback port for five minutes
-    /// and block the new one from binding it. Codex's fixed port 1455 makes
-    /// that failure certain rather than merely likely.
+    /// Callers must only reach this once they have established that no login
+    /// is still in flight — see the reuse check in `api::begin_login`. Racing
+    /// two attempts is not merely wasteful: the second cannot bind the loopback
+    /// port until the first lets go of it, and if the browser is still pointed
+    /// at the first one's URL the code comes back to a listener whose task has
+    /// been cancelled. That looks like success in the browser and a login that
+    /// never completes everywhere else.
+    ///
+    /// The supersede path is kept anyway, because "finished" is decided a
+    /// moment before this runs and two clicks can still slip between.
     pub async fn install(&self, session: Arc<Session>, task: JoinHandle<()>) {
         let mut inner = self.inner.lock().await;
         if let Some(old) = inner.insert(session.provider.clone(), Entry { session, task }) {
             old.task.abort();
+            let _ = old.task.await;
             old.session.set(Phase::Failed {
                 message: "superseded by a newer sign-in attempt".into(),
             });
         }
+    }
+
+    /// Abandon a login, freeing its loopback port.
+    ///
+    /// Leaving the sign-in screen has to do this. A task left running holds its
+    /// redirect port for the full five-minute timeout — and Codex's port is a
+    /// fixed 1455, registered with the provider, so nothing else can be used
+    /// instead. The next attempt, from us or from `codex login`, would simply
+    /// fail to start.
+    ///
+    /// Awaits the cancellation rather than firing and forgetting, so that by
+    /// the time this returns the socket really is closed and an immediate
+    /// retry can bind it.
+    pub async fn cancel(&self, provider: &str) -> bool {
+        let Some(entry) = self.inner.lock().await.remove(provider) else {
+            return false;
+        };
+        entry.task.abort();
+        let _ = entry.task.await;
+        entry.session.set(Phase::Failed {
+            message: "sign-in cancelled".into(),
+        });
+        true
     }
 
     pub async fn get(&self, provider: &str) -> Option<Arc<Session>> {
@@ -245,6 +287,101 @@ impl Logins {
     pub async fn abort_all(&self) {
         for (_, entry) in self.inner.lock().await.drain() {
             entry.task.abort();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn idle() -> JoinHandle<()> {
+        tokio::spawn(std::future::pending())
+    }
+
+    #[tokio::test]
+    async fn a_session_is_readable_until_it_is_replaced() {
+        let logins = Logins::default();
+        let (session, _ui) = session("claude", true);
+        let id = session.id.clone();
+        logins.install(session.clone(), idle()).await;
+
+        // Deliberately still there after it finishes: the UI learns that a
+        // sign-in succeeded by polling for exactly this, so dropping the entry
+        // on completion would turn the moment of success into a 404.
+        session.set(Phase::Done);
+        let found = logins.get("claude").await.expect("session went missing");
+        assert_eq!(found.id, id);
+        assert!(matches!(found.phase(), Phase::Done));
+    }
+
+    #[tokio::test]
+    async fn cancelling_frees_the_slot_and_says_why() {
+        let logins = Logins::default();
+        let (session, _ui) = session("codex", false);
+        logins.install(session.clone(), idle()).await;
+
+        assert!(logins.cancel("codex").await);
+        assert!(logins.get("codex").await.is_none());
+        // The screen that cancelled has usually gone, but anything still
+        // holding the session must not be left reading "waiting" forever.
+        assert!(matches!(session.phase(), Phase::Failed { .. }));
+
+        assert!(!logins.cancel("codex").await, "cancelling twice is not an error");
+    }
+
+    #[tokio::test]
+    async fn a_phase_is_recorded_even_with_nobody_listening() {
+        // The regression that made every browser sign-in look stuck. Nothing
+        // holds a receiver between `opened()` returning and the status endpoint
+        // being polled, and `watch::Sender::send` discards the value outright
+        // when the receiver count is zero — so `Done` and `Failed` were written
+        // into the void and the session stayed on `Waiting` forever.
+        let (session, _ui) = session("openrouter", false);
+        assert!(matches!(session.phase(), Phase::Opening));
+
+        session.set(Phase::Waiting {
+            authorize_url: "https://example.test/a".into(),
+            needs_code: false,
+        });
+        assert!(matches!(session.phase(), Phase::Waiting { .. }));
+
+        session.set(Phase::Done);
+        assert!(matches!(session.phase(), Phase::Done), "the outcome was dropped");
+    }
+
+    #[tokio::test]
+    async fn a_code_can_only_be_submitted_once() {
+        let (session, ui) = session("claude", true);
+        let rx = ui.code_channel().expect("the first take yields the receiver");
+        assert!(ui.code_channel().is_none(), "two flows must not share one code");
+
+        session.submit_code("abc".into()).unwrap();
+        assert_eq!(rx.await.unwrap(), "abc");
+        // The sender is spent; a stale tab posting again gets an error rather
+        // than silently doing nothing.
+        assert!(session.submit_code("def".into()).is_err());
+    }
+
+    #[tokio::test]
+    async fn opened_waits_for_the_url_and_then_returns_it() {
+        let (session, ui) = session("codex", false);
+        let watcher = tokio::spawn({
+            let session = session.clone();
+            async move { session.opened().await }
+        });
+
+        ui.open("https://example.test/authorize").unwrap();
+
+        match watcher.await.unwrap() {
+            Phase::Waiting {
+                authorize_url,
+                needs_code,
+            } => {
+                assert_eq!(authorize_url, "https://example.test/authorize");
+                assert!(!needs_code);
+            }
+            other => panic!("expected Waiting, got {other:?}"),
         }
     }
 }

@@ -24,6 +24,17 @@ const token = ref("");
 /** True once we have opened the browser at least once, to reword the button. */
 const opened = ref(false);
 
+/**
+ * Consecutive failed status polls.
+ *
+ * One failure is not the login failing — the daemon is still sitting on the
+ * browser, and a webview that has just been backgrounded drops requests. Only a
+ * run of them means we have genuinely lost contact, and even then it is worth
+ * saying so rather than leaving "Waiting for the browser…" on screen forever.
+ */
+let misses = 0;
+const MAX_MISSES = 5;
+
 let poll: number | undefined;
 
 onMounted(start);
@@ -32,6 +43,31 @@ onUnmounted(stopPolling);
 function stopPolling() {
   if (poll !== undefined) window.clearInterval(poll);
   poll = undefined;
+}
+
+/**
+ * Leave without finishing.
+ *
+ * Tells the daemon to drop the sign-in rather than just navigating away. The
+ * task would otherwise run for its full five-minute timeout still holding the
+ * redirect port — fixed at 1455 for Codex, because the provider registered it —
+ * so the next attempt would have nothing to listen on.
+ */
+async function cancel() {
+  stopPolling();
+  if (phase.value && !isFinal(phase.value)) {
+    try {
+      await api.cancelLogin(props.provider.id);
+    } catch {
+      // Best effort. It expires on its own, and refusing to leave the screen
+      // because the daemon did not answer would be worse.
+    }
+  }
+  emit("cancel");
+}
+
+function isFinal(p: Phase): boolean {
+  return p.phase === "done" || p.phase === "failed";
 }
 
 async function start() {
@@ -79,21 +115,23 @@ async function beginBrowserLogin() {
  */
 function watchProgress() {
   stopPolling();
+  misses = 0;
   poll = window.setInterval(async () => {
     try {
       const status = await api.loginStatus(props.provider.id);
+      misses = 0;
       phase.value = status.phase;
       session.value = status.session;
-      if (status.phase.phase === "done") {
+      if (isFinal(status.phase)) stopPolling();
+      if (status.phase.phase === "done") emit("done");
+    } catch (e) {
+      // Giving up on the first failure is how a sign-in that had already
+      // failed on the daemon went on showing "Waiting for the browser…"
+      // indefinitely: the screen was watching a status it had stopped reading.
+      if (++misses >= MAX_MISSES) {
         stopPolling();
-        emit("done");
-      } else if (status.phase.phase === "failed") {
-        stopPolling();
+        error.value = `Lost contact with uwd while waiting: ${message(e)}`;
       }
-    } catch {
-      // A 404 means the session was replaced or the daemon restarted; either
-      // way there is nothing left to wait for.
-      stopPolling();
     }
   }, 1500);
 }
@@ -136,12 +174,18 @@ function reopen() {
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
+
+/** Seconds spent waiting on the browser, for the stalled-sign-in hint. */
+const waited = ref(0);
+let ticker: number | undefined;
+onMounted(() => (ticker = window.setInterval(() => (waited.value += 1), 1000)));
+onUnmounted(() => window.clearInterval(ticker));
 </script>
 
 <template>
   <section class="view">
     <header class="bar">
-      <button class="link" title="Back" @click="emit('cancel')">‹</button>
+      <button class="link" title="Back" @click="cancel">‹</button>
       <strong>{{ provider.label }}</strong>
     </header>
 
@@ -215,6 +259,14 @@ function message(e: unknown): string {
             </div>
           </form>
           <p v-else class="waiting">Waiting for the browser…</p>
+          <!-- Not decoration. A sign-in that has stalled and one that is
+               proceeding normally look identical, and the difference is the
+               only thing worth knowing at this point. -->
+          <p v-if="waited > 45" class="waiting">
+            Still waiting after {{ waited }}s. If the browser said it signed you
+            in, go back and start again — that cancels this attempt cleanly and
+            frees the port it is listening on.
+          </p>
         </template>
 
         <template v-else-if="phase.phase === 'failed'">

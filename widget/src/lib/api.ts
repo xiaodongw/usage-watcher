@@ -68,6 +68,12 @@ export const api = {
   loginStatus: (id: string) =>
     call<LoginStarted>(`/providers/${encodeURIComponent(id)}/login`),
 
+  /** Abandon a sign-in, freeing the loopback port it is holding. */
+  cancelLogin: (id: string) =>
+    call<{ cancelled: boolean }>(`/providers/${encodeURIComponent(id)}/login`, {
+      method: "DELETE",
+    }),
+
   /** For providers that display a code instead of redirecting back. */
   submitCode: (id: string, session: string, code: string) =>
     call<LoginStarted>(

@@ -83,6 +83,10 @@ impl Loopback {
                     respond(&mut sock, 400, "Malformed request.").await;
                     continue;
                 };
+                // The one log line that distinguishes "the browser never
+                // reached us" from "it reached us and we rejected it" — which
+                // are the same blank screen from the outside.
+                tracing::debug!(target = %target, "redirect receiver got a request");
                 // Browsers ask for /favicon.ico and similar; ignore anything
                 // that is not our redirect path.
                 if !target.starts_with(&self.path) {
@@ -123,10 +127,15 @@ impl Loopback {
                     }
                 }
 
+                // Not "Signed in": at this point we have an authorization
+                // code and nothing more. The token exchange still has to run
+                // and can still fail, and a page claiming success while the
+                // panel goes on to show an error is how a failed sign-in gets
+                // read as a broken UI. Say what actually happened.
                 respond(
                     &mut sock,
                     200,
-                    "Signed in. You can close this tab and return to your terminal.",
+                    "Got it — you can close this tab. usage-watcher is finishing the sign-in.",
                 )
                 .await;
                 return Ok(Callback { code: code.clone() });

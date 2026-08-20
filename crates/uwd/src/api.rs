@@ -241,6 +241,28 @@ pub async fn submit_code(
     }
 }
 
+/// Abandon a sign-in that is still in flight.
+///
+/// What leaving the sign-in screen calls. Without it the task runs on for its
+/// full five-minute timeout still holding the redirect port — which for Codex
+/// is a fixed 1455, so neither a retry nor `codex login` could start until it
+/// expired.
+pub async fn cancel_login(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(q): Query<Auth>,
+) -> Response {
+    if let Err(r) = authorize(&st, &headers, &q) {
+        return r;
+    }
+    let cancelled = st.logins.cancel(&id).await;
+    if cancelled {
+        tracing::info!(provider = %id, "sign-in cancelled");
+    }
+    Json(serde_json::json!({ "cancelled": cancelled })).into_response()
+}
+
 /// Store a pasted API key and switch the provider to it.
 pub async fn set_token(
     State(st): State<AppState>,
@@ -309,9 +331,40 @@ pub async fn logout(
 
 // ------------------------------------------------------------------ internals
 
+/// How long to wait for the OAuth client to produce the authorize URL.
+const URL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 async fn begin_login(st: &AppState, id: &str) -> Result<LoginStarted> {
     let adapter = Any::by_id(id).with_context(|| format!("unknown provider `{id}`"))?;
     let oauth = adapter.oauth_config()?;
+
+    // A login already in flight is the one the user's browser is pointed at.
+    // Hand that one back rather than starting a rival.
+    //
+    // Starting a second is actively destructive, not merely wasteful. The two
+    // want the same loopback port — fixed at 1455 for Codex, because the
+    // provider registered it — so the second cannot listen until the first
+    // lets go, and the browser is still carrying the first one's `state`. The
+    // code then comes back to a listener whose task has been cancelled: the
+    // browser shows our success page, the token exchange never runs, and the
+    // panel sits watching a session nothing will ever hit. Two clicks on
+    // "Sign in" were enough to produce exactly that.
+    if let Some(existing) = st.logins.get(id).await {
+        if !existing.phase().is_final() {
+            let phase = tokio::time::timeout(URL_TIMEOUT, existing.opened())
+                .await
+                .unwrap_or(Phase::Failed {
+                    message: "timed out building the authorization URL".into(),
+                });
+            if !phase.is_final() {
+                tracing::debug!(provider = id, "reusing the sign-in already in progress");
+                return Ok(LoginStarted {
+                    session: existing.id.clone(),
+                    phase,
+                });
+            }
+        }
+    }
 
     // Whether the UI should offer a code field, taken from the flow rather than
     // guessed. Two shapes need one: a provider that only ever displays a code,
@@ -357,10 +410,19 @@ async fn begin_login(st: &AppState, id: &str) -> Result<LoginStarted> {
             .await;
 
             session.set(match outcome {
-                Ok(()) => Phase::Done,
-                Err(e) => Phase::Failed {
-                    message: format!("{e:#}"),
-                },
+                Ok(()) => {
+                    tracing::info!(provider = %id, "signed in");
+                    Phase::Done
+                }
+                Err(e) => {
+                    // Logged as well as reported. The phase reaches the client
+                    // only if something is still polling for it, and the case
+                    // worth diagnosing is precisely the one where nothing is.
+                    tracing::warn!(provider = %id, "sign-in failed: {e:#}");
+                    Phase::Failed {
+                        message: format!("{e:#}"),
+                    }
+                }
             });
 
             // Either way the provider's state changed: on success there is a
@@ -375,7 +437,7 @@ async fn begin_login(st: &AppState, id: &str) -> Result<LoginStarted> {
     // "Opening" and making the client poll for the one thing it needs. Building
     // it is pure computation, so this returns almost immediately; the timeout
     // is only here so a wedged login cannot hold an HTTP request open.
-    let phase = tokio::time::timeout(std::time::Duration::from_secs(15), session.opened())
+    let phase = tokio::time::timeout(URL_TIMEOUT, session.opened())
         .await
         .unwrap_or(Phase::Failed {
             message: "timed out building the authorization URL".into(),

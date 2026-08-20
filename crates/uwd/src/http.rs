@@ -60,7 +60,9 @@ pub fn router(state: AppState) -> Router {
         .route("/providers/{id}", delete(api::remove))
         .route(
             "/providers/{id}/login",
-            get(api::login_status).post(api::start_login),
+            get(api::login_status)
+                .post(api::start_login)
+                .delete(api::cancel_login),
         )
         .route("/providers/{id}/login/code", post(api::submit_code))
         .route("/providers/{id}/token", post(api::set_token))
