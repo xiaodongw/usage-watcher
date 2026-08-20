@@ -151,11 +151,24 @@ This is the intended home for the tray widget. The daemon stays in WSL.
 
 ### Prerequisites
 
-1. **[Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)**
-   with the **Desktop development with C++** workload. Rust's `stable-msvc`
-   toolchain needs the MSVC linker; this is not optional and not small.
+1. **The MSVC toolchain**, via the **Desktop development with C++** workload.
+   Either source works and they install the same thing:
+   - [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+     — the toolchain without the IDE, if you have neither.
+   - **Visual Studio 2022** (any edition, including Community) with that
+     workload ticked — already enough. Do not install the Build Tools as well.
+
+   What Rust actually needs out of it is `link.exe` and a Windows SDK, both of
+   which that workload provides. A non-default install location is fine; rustup
+   finds it through `vswhere` rather than a fixed path.
+
+   **Mobile development with C++** is *not* wanted. It is for C++
+   cross-platform mobile projects and has nothing to do with the Android build
+   here, which uses the Android SDK and NDK instead.
 2. **[rustup](https://win.rustup.rs)** — the defaults are right
-   (`stable-x86_64-pc-windows-msvc`).
+   (`stable-x86_64-pc-windows-msvc`). Check with `rustc -vV`: `host` must end
+   in `-msvc`. If it says `-gnu`, the linker above will not be used at all —
+   `rustup default stable-x86_64-pc-windows-msvc` fixes it.
 3. **[Node LTS](https://nodejs.org)**.
 4. **WebView2 runtime** — already present on Windows 11 and on Windows 10 since
    version 1803. Only needed on genuinely old installs.
