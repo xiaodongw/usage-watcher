@@ -200,7 +200,22 @@ This is the intended home for the tray widget. The daemon stays in WSL.
    Prefer `rustup.install` over `choco install rust-ms`: the latter gives the
    right ABI but no rustup, and [Android](#android) needs
    `rustup target add` for four cross-compilation targets.
-3. **[Node LTS](https://nodejs.org)**.
+3. **[Node LTS](https://nodejs.org)** — the installer from the site, or, if you
+   already have Chocolatey from the step above:
+
+   ```powershell
+   choco install nodejs-lts -y
+   # then, in a NEW terminal so PATH is picked up:
+   node --version
+   npm --version
+   ```
+
+   `nodejs-lts`, not `nodejs`: the plain package tracks Current, which moves to
+   a new major every six months. Either satisfies the version floor in [Common
+   to everything](#common-to-everything), but only one of them stops changing
+   under you. Pick one source and stay with
+   it — a `choco install` over an existing nodejs.org install leaves two copies
+   on `PATH`, and which `npm` you get then depends on the order.
 4. **WebView2 runtime** — already present on Windows 11 and on Windows 10 since
    version 1803. Only needed on genuinely old installs.
 5. **VBSCRIPT**, a Windows optional feature, if you want the `.msi` installer.
