@@ -29,7 +29,13 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2" }
+# `features = []` is the Tauri CLI's doing, not a hand edit: it normalises this
+# entry every time it runs, so leaving the key off means a dirty Cargo.toml
+# after every build. It means exactly what omitting it means — no extra
+# features, defaults still on — and `tray-icon` still arrives via the desktop
+# target block below. Committing the CLI's own output is what keeps the tree
+# clean; do not tidy it away.
+tauri = { version = "2", features = [] }
 tauri-plugin-notification = "2"
 # Opening the OAuth consent page in the user's real browser. It has to be the
 # real one: the webview has no session with the provider.
