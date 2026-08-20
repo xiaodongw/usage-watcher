@@ -449,6 +449,16 @@ main reason to prefer localhost forwarding. You must **also** add that origin to
 `connect-src` in `widget/src-tauri/tauri.conf.json`: the webview's CSP names the
 daemons it may talk to, and an unlisted one is blocked before a request leaves.
 
+**`Failed to unregister class Chrome_WidgetWin_0. Error = 1412` on exit** —
+harmless, and not ours. 1412 is `ERROR_CLASS_HAS_WINDOWS`: the Chromium inside
+WebView2 tries to unregister its window class while a window of that class is
+still alive, and logs it at ERROR level. It has been an open Chromium issue
+since 2012 and plain Chrome prints it too. The process is exiting, so nothing
+leaks.
+
+It is only visible because a debug build keeps a console attached —
+`windows_subsystem = "windows"` in `main.rs` means release builds have none.
+
 **A GNOME extension that will not enable** — the shell disables an extension
 that throws during `enable()` and records why:
 
