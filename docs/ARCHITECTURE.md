@@ -12,7 +12,7 @@
 |---|---|---|
 | `uwd` | collector — polls, alerts, serves the API | wherever the credentials are |
 | `uw` | CLI — one-shot read, and every auth command | same |
-| `widget/` | Vue panel in a Tauri shell, **with the collector inside it** | Windows and macOS tray, Android and iOS |
+| `widget/` | Vue panel in a Tauri shell, **with the collector inside it** | Windows and macOS tray; Android and iOS are planned |
 | `gnome-extension/` | GNOME Shell panel indicator | Linux |
 
 The collector is the product; everything else is a viewer over the same JSON.
@@ -24,8 +24,8 @@ Windows against a collector inside WSL, or on a phone against your desktop.
 ```
                                   ┌─ tray widget (Windows, macOS) ─┐
 uwd ──/snapshot + /events (SSE) ──┼─ GNOME extension (Linux)       │ usually the
- │                                ├─ phone app (Android, iOS)      │ same process
- │                                └─ uw --json                     ┘
+ │                                ├─ uw --json                     │ same process
+ │                                └─ phone app (planned)           ┘
  └── Claude · Codex · opencode · OpenRouter
 ```
 
@@ -111,7 +111,7 @@ check a change before building anything native.
 | browser | nothing; the panel as-is | `npm --prefix widget run dev` |
 | Windows tray | tray icon, frameless popover, notifications, start at login | `npm run app:build` |
 | macOS menu bar | the same, plus no Dock icon and the figure in the menu bar | `npm run app:build` |
-| Android / iOS | full-screen panel, daemon address set in-app | `./mobile.sh <platform> build` |
+| Android / iOS — **planned** | full-screen panel, daemon address set in-app | `./mobile.sh <platform> build` |
 | GNOME | native panel indicator, no webview at all | `gnome-extension/install.sh` |
 
 **Prerequisites, per platform and per target, are in
@@ -146,7 +146,11 @@ building it needs the platform webview toolchain, which a WSL checkout usually
 lacks, and keeping it out means `cargo test` at the repo root stays green
 everywhere.
 
-### The phone is a viewer, not a collector
+### The phone is a viewer, not a collector — and is not shipped yet
+
+The shells build and the design below is settled, but nothing has been run on a
+real device, so the mobile targets are not part of any release and should be
+read as intent rather than as a feature.
 
 It reads a daemon you are already running — over Tailscale, in practice, which
 is also the only sane way to expose `uwd` beyond loopback. It does **not** poll

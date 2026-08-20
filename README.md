@@ -36,10 +36,12 @@ you hit a wall rather than after.
 
 ## Getting started
 
-Unzip it and double-click **usage-watcher**. Nothing to install, no service to
-start, nothing left behind if you delete the folder. (There are no prebuilt
-downloads yet — `scripts/package.sh`, or `scripts\package.ps1` on Windows,
-builds that zip from a checkout.)
+Grab the zip for your platform from
+[Releases](https://github.com/xiaodongw/usage-watcher/releases/latest), unzip,
+and double-click **usage-watcher**. Nothing to install, no service to start,
+nothing left behind if you delete the folder. There is no macOS build yet — a
+desktop app cannot be cross-compiled, so each one has to be built on its own
+machine; `scripts/package.sh` produces the same zip from a checkout.
 
 It puts an icon in the tray or menu bar. Click it for the panel.
 
@@ -107,7 +109,7 @@ inside WSL while the panel runs on Windows.
 | **Windows** | tray icon and a popover panel |
 | **macOS** | menu-bar app, with the figure beside the icon |
 | **Linux** | a [GNOME Shell extension](gnome-extension/README.md) — a real panel indicator, not a tray shim |
-| **Android, iOS** | full-screen panel, reading a collector you run elsewhere |
+| **Android, iOS** | *planned* — the shells build, but nothing has been tested on a device yet, so they are not part of a release |
 
 ---
 
