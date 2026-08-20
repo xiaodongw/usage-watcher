@@ -31,7 +31,7 @@ Build prerequisites for every target and host are in
 ## Quick start
 
 ```sh
-cargo install --path crates/uw-cli     # the `uw` command
+cargo install --path crates/uw-cli     # the `uw` command; --force to update
 uw auth login claude                   # own OAuth grant, refreshed by us
 uw auth login codex                    # needs port 1455 free — no `codex login` running
 uw auth login openrouter               # browser consent, mints a key for us
@@ -44,6 +44,15 @@ npm --prefix widget run dev            # panel at http://localhost:5173
 
 opencode needs no login: it keeps a static API key on disk and the default
 `delegated` mode reads it.
+
+The version never changes during development, so `cargo install` refuses to
+replace an existing `uw` and you keep running the old one — which shows up as a
+provider or a flag that the source plainly supports being reported as unknown.
+After a pull:
+
+```sh
+cargo install --path crates/uw-cli --force
+```
 
 ## Providers
 
