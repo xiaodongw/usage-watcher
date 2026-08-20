@@ -240,8 +240,8 @@ history = 1500            # snapshots kept in memory for burn-rate
 [providers.claude]
 auth = "own"
 enabled = true
-# interval_active = 60    # seconds; floored at 30 so the watcher never becomes
-# interval_idle = 300     # a meaningful share of your own quota
+# interval_active = 180   # seconds; floored at 30 so the watcher never becomes
+# interval_idle = 600     # a meaningful share of your own quota
 
 [providers.opencode]
 auth = "delegated"        # reads the key `opencode auth login` stored
@@ -287,14 +287,19 @@ sustained outage drops the numbers. A one-shot `uw` has nothing to fall back on,
 so it prints the 429 — most often because `uwd` is already polling and the two
 asked within a second of each other.
 
-If Claude spends more time dimmed than not, raise its poll interval rather than
-living with it. The 5-hour window moves about a third of a percent per minute,
-so nothing is lost:
+**Every provider polls on the same rhythm: 180s while something is being
+consumed, 600s otherwise.** The adapters used to disagree — a minute for Claude,
+because its 5-hour window can move several percent in that time; five for
+OpenRouter, because a prepaid balance only moves when you spend. All true, and
+all beside the point once you notice these are undocumented endpoints counted
+per IP. Three minutes costs a percent or two of resolution on the one meter fast
+enough to notice; a minute costs the whole tile for an hour.
 
-```toml
-[providers.claude]
-interval_active = 180
-```
+"Consumed" is decided by the window that resets soonest, and only that one.
+Claude reports a 5-hour window beside two weekly ones, and the weeklies sit at
+double digits for days after a single request — so under the older rule of "any
+window above zero" Claude never once reached the idle tier. It polled every
+minute around the clock whether or not it had been touched since Tuesday.
 
 ## API
 

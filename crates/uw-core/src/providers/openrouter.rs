@@ -88,12 +88,6 @@ impl Adapter for OpenRouter {
         )
     }
 
-    /// The slowest of the four. A prepaid balance only moves when you spend,
-    /// and the account wallet is not a per-request counter.
-    fn poll_intervals(&self) -> (u64, u64) {
-        (300, 900)
-    }
-
     async fn fetch(
         &self,
         http: &reqwest::Client,

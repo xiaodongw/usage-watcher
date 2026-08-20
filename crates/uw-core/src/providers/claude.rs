@@ -126,13 +126,6 @@ impl Adapter for Claude {
         )
     }
 
-    /// A minute is worth it here and almost nowhere else: the 5-hour window is
-    /// the meter people actually watch, and it can move several percent in that
-    /// time during a heavy session.
-    fn poll_intervals(&self) -> (u64, u64) {
-        (60, 300)
-    }
-
     fn read_delegated(&self, path: &Path) -> Result<Credential> {
         read_delegated(path)
     }

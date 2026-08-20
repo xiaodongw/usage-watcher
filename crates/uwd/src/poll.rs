@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::watch;
+use chrono::{DateTime, Utc};
 use uw_core::collect::Poller;
 use uw_core::limits::RateLimited;
 use uw_core::model::{MeterKind, Provider};
@@ -34,14 +35,49 @@ impl Schedule {
 
     /// A provider is "active" when something is actually being consumed, which
     /// is the only time a fast poll tells us anything new.
+    ///
+    /// Only the window that resets soonest gets a vote. This used to be "any
+    /// window above zero", which read as "active" far more often than it
+    /// should: Claude reports a 5-hour window beside two weekly ones, and the
+    /// weeklies sit at 13% and 22% for days after a single request. So Claude
+    /// polled at the active rate around the clock — sixty requests an hour,
+    /// whether or not it had been touched since Tuesday — against an endpoint
+    /// that rate limits by IP. The idle tier existed and never once applied.
+    ///
+    /// The soonest-resetting window is the one a fast poll could actually learn
+    /// something from. A 7-day bucket at 13% says nothing about whether
+    /// anything is being spent right now; a 5-hour window above zero says you
+    /// used it within the last five hours, and it does fall back to zero
+    /// overnight.
     fn for_reading(&self, p: &Provider) -> Duration {
-        let consuming = p.meters.iter().any(|m| match m.kind {
-            MeterKind::Window { used_pct, .. } => used_pct > 0.0,
-            // A balance only moves when something is spent, and we cannot tell
-            // from one reading whether that is happening; treat it as idle and
-            // let the window meters drive the pace.
-            MeterKind::Balance { .. } | MeterKind::Spend { .. } => false,
-        });
+        let windows: Vec<(Option<DateTime<Utc>>, f32)> = p
+            .meters
+            .iter()
+            .filter_map(|m| match m.kind {
+                MeterKind::Window {
+                    used_pct,
+                    resets_at,
+                    ..
+                } => Some((resets_at, used_pct)),
+                // A balance only moves when something is spent, and we cannot
+                // tell from one reading whether that is happening; treat it as
+                // idle and let the window meters drive the pace.
+                MeterKind::Balance { .. } | MeterKind::Spend { .. } => None,
+            })
+            .collect();
+
+        let consuming = match windows
+            .iter()
+            .filter_map(|(at, pct)| at.map(|at| (at, *pct)))
+            .min_by_key(|(at, _)| *at)
+        {
+            Some((_, used_pct)) => used_pct > 0.0,
+            // No window says when it resets, so there is no "soonest" to pick.
+            // Fall back to the old rule rather than calling it idle: a provider
+            // that omits the timestamps should not silently poll slowly.
+            None => windows.iter().any(|(_, pct)| *pct > 0.0),
+        };
+
         if consuming {
             self.active
         } else {
@@ -168,6 +204,8 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{Duration as ChronoDuration, Utc};
+    use uw_core::model::{AuthKind, Meter, Status};
 
     fn sched() -> Schedule {
         Schedule::from_secs((60, 300))
@@ -228,9 +266,6 @@ mod tests {
         let slept = sleep_for(minute, false);
         assert!(slept >= minute * 9 / 10 && slept <= minute * 11 / 10, "{slept:?}");
     }
-    use chrono::Utc;
-    use uw_core::model::{AuthKind, Meter, Status};
-
     fn schedule() -> Schedule {
         Schedule::from_secs((60, 300))
     }
@@ -257,6 +292,41 @@ mod tests {
     fn an_untouched_window_polls_at_the_idle_rate() {
         let p = with_meters(vec![Meter::window("s", "5-hour", 0.0, None, None)]);
         assert_eq!(schedule().for_reading(&p), Duration::from_secs(300));
+    }
+
+    /// A Claude reading: a 5-hour window and two weekly ones, which is the
+    /// shape that made the old rule wrong.
+    fn claude_like(session_pct: f32, weekly_pct: f32) -> Provider {
+        let hours = |n: i64| Some(Utc::now() + ChronoDuration::hours(n));
+        with_meters(vec![
+            Meter::window("session", "5-hour", session_pct, hours(3), None),
+            Meter::window("weekly_all", "7-day", weekly_pct, hours(24 * 5), None),
+            Meter::window("weekly_scoped", "weekly · Fable", weekly_pct, hours(24 * 5), None),
+        ])
+    }
+
+    #[test]
+    fn a_weekly_bucket_left_over_from_tuesday_does_not_count_as_busy() {
+        // The bug this rule was written for. The weeklies stay at 13% for days
+        // after a single request, so "any window above zero" meant Claude
+        // polled at the active rate permanently — sixty requests an hour into
+        // an endpoint that rate limits by IP.
+        let p = claude_like(0.0, 13.0);
+        assert_eq!(schedule().for_reading(&p), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn the_five_hour_window_still_decides_the_pace() {
+        let p = claude_like(28.0, 13.0);
+        assert_eq!(schedule().for_reading(&p), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn a_provider_that_dates_none_of_its_windows_still_polls_fast_when_busy() {
+        // No timestamps means no "soonest", and guessing idle would quietly
+        // halve the resolution of a provider that simply reports less.
+        let p = with_meters(vec![Meter::window("w", "window", 40.0, None, None)]);
+        assert_eq!(schedule().for_reading(&p), Duration::from_secs(60));
     }
 
     #[test]

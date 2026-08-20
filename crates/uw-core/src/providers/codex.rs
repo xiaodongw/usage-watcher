@@ -82,12 +82,6 @@ impl Adapter for Codex {
         .docs("https://developers.openai.com/codex/cli")
     }
 
-    /// Codex publishes a 7-day bucket and nothing shorter, so a fast poll
-    /// returns the same number it returned a minute ago.
-    fn poll_intervals(&self) -> (u64, u64) {
-        (120, 600)
-    }
-
     fn read_delegated(&self, path: &Path) -> Result<Credential> {
         read_delegated(path)
     }

@@ -80,11 +80,26 @@ pub trait Adapter: Send + Sync {
     /// Default seconds between polls, `(active, idle)`, before any config
     /// override and the 30-second floor.
     ///
-    /// "Active" means something is currently being consumed. A provider that
-    /// only publishes a 7-day bucket learns nothing from a fast poll, so the
-    /// rhythm belongs to the adapter that knows what it is reading.
+    /// "Active" means the provider's fastest-moving window is above zero — see
+    /// `Schedule::for_reading` in `uwd`.
+    ///
+    /// Every provider currently takes this default, and the reasoning that
+    /// once justified four different pairs did not survive contact with a rate
+    /// limiter. It went: Claude's 5-hour window can move several percent in a
+    /// minute, so poll it every minute; Codex publishes a 7-day bucket and
+    /// nothing shorter, so don't; an OpenRouter balance only moves when you
+    /// spend, so really don't. All true, and all beside the point. What none of
+    /// it accounted for is that these are undocumented endpoints behind edge
+    /// networks that count requests per IP, and Anthropic's answers a 429 with
+    /// an hour in the penalty box. Three minutes costs a percent or two of
+    /// resolution on the one meter that moves fast enough to notice; a minute
+    /// costs the whole tile for an hour.
+    ///
+    /// The hook stays because the next provider may genuinely need something
+    /// else — a per-request quota, or a limiter that documents its budget. It
+    /// is just no longer a knob to turn by taste.
     fn poll_intervals(&self) -> (u64, u64) {
-        (120, 600)
+        (180, 600)
     }
 
     /// Parse the vendor CLI's credential file.
@@ -423,6 +438,31 @@ pub(crate) fn jwt_expiry(token: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 mod tests {
     use super::*;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+    #[test]
+    fn every_provider_polls_on_the_same_rhythm() {
+        // Not a style rule. These endpoints are undocumented and counted per
+        // IP, and the four of them share one address; a provider that decides
+        // on its own that it deserves a faster poll is spending a budget the
+        // others also draw on. If a new one genuinely needs its own pace,
+        // change this test deliberately rather than because it went red.
+        for adapter in Any::all() {
+            assert_eq!(
+                adapter.poll_intervals(),
+                (180, 600),
+                "{} set its own pace",
+                adapter.id()
+            );
+        }
+    }
+
+    #[test]
+    fn the_active_rate_stays_clear_of_the_floor() {
+        // `Config::intervals` floors both at 30s. A default at or below it
+        // would mean the floor, not the default, was the real setting.
+        let (active, idle) = Any::Claude(claude::Claude).poll_intervals();
+        assert!(active > 30 && idle > active);
+    }
 
     #[test]
     fn reads_jwt_expiry() {
