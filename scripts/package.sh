@@ -26,6 +26,78 @@ case "$(uname -s)" in
   *)      platform="windows-x86_64"    ; exe=".exe" ;;
 esac
 
+# Everything the Linux app links against, and the package that supplies it.
+#
+# Checked up front, all of it, before a single crate is compiled. The build
+# itself reports these one at a time, ten minutes apart, and always names the
+# pkg-config module rather than the package — so the natural way to satisfy it
+# is to install the leaf that was named and start again. That loop does not
+# converge quickly: `atk`, `pango`, `libsoup-3.0` and `javascriptcoregtk-4.1`
+# are all dependencies of libgtk-3-dev and libwebkit2gtk-4.1-dev, so installing
+# them one at a time is walking up the tree from the leaves while the two
+# packages that would have brought the whole set stay missing.
+linux_deps() {
+  cat <<'DEPS'
+webkit2gtk-4.1            libwebkit2gtk-4.1-dev
+javascriptcoregtk-4.1     libwebkit2gtk-4.1-dev
+libsoup-3.0               libwebkit2gtk-4.1-dev
+gtk+-3.0                  libgtk-3-dev
+gdk-3.0                   libgtk-3-dev
+gdk-x11-3.0               libgtk-3-dev
+gdk-wayland-3.0           libgtk-3-dev
+gdk-pixbuf-2.0            libgtk-3-dev
+cairo                     libgtk-3-dev
+pango                     libgtk-3-dev
+atk                       libgtk-3-dev
+glib-2.0                  libglib2.0-dev
+gobject-2.0               libglib2.0-dev
+gio-2.0                   libglib2.0-dev
+ayatana-appindicator3-0.1 libayatana-appindicator3-dev
+dbus-1                    libdbus-1-dev
+DEPS
+}
+
+preflight() {
+  local missing=() modules=() pkg module tool
+  for tool in cargo npm pkg-config zip; do
+    command -v "$tool" >/dev/null || missing+=("$tool")
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    echo "not on PATH: ${missing[*]}" >&2
+    exit 1
+  fi
+
+  [ "$(uname -s)" = "Linux" ] || return 0
+
+  while read -r module pkg; do
+    [ -n "$module" ] || continue
+    pkg-config --exists "$module" 2>/dev/null && continue
+    modules+=("$module")
+    case " ${missing[*]} " in *" $pkg "*) ;; *) missing+=("$pkg") ;; esac
+  done < <(linux_deps)
+
+  [ ${#missing[@]} -eq 0 ] && return 0
+
+  {
+    echo "the Tauri app cannot be built here yet."
+    echo
+    echo "missing pkg-config modules: ${modules[*]}"
+    echo
+    echo "on Debian or Ubuntu, all of it at once:"
+    echo
+    echo "  sudo apt install ${missing[*]}"
+    echo
+    echo "Fedora, Arch and the reasoning are in docs/BUILDING.md."
+    echo
+    echo "The CLI and the daemon need none of this:"
+    echo
+    echo "  cargo build --release -p uw-cli -p uwd"
+  } >&2
+  exit 1
+}
+
+preflight
+
 stage="$out/usage-watcher-$version-$platform"
 rm -rf "$stage"
 mkdir -p "$stage"
