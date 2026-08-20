@@ -221,18 +221,6 @@ This is the intended home for the tray widget. The daemon stays in WSL.
 5. **VBSCRIPT**, a Windows optional feature, if you want the `.msi` installer.
    Enabled by default; only worth knowing about if someone turned it off.
 
-### Get the source onto a Windows drive
-
-Building across `\\wsl.localhost` works but is slow enough to be unpleasant —
-every file read crosses the 9p filesystem, and Cargo reads a great many files.
-
-```powershell
-git clone \\wsl.localhost\Ubuntu\home\xiaodong\work\usage-watcher C:\dev\usage-watcher
-```
-
-That clone is an ordinary git remote, so `git pull` there picks up commits made
-on the WSL side.
-
 ### Build and run
 
 ```sh
@@ -240,7 +228,7 @@ cargo run -p uwd            # in WSL, where the credentials are
 ```
 
 ```powershell
-cd C:\dev\usage-watcher\widget
+cd <your-clone>\widget
 npm install
 npm run app:dev             # or: npm run app:build
 ```
