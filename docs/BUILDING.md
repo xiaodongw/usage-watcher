@@ -165,10 +165,32 @@ This is the intended home for the tray widget. The daemon stays in WSL.
    **Mobile development with C++** is *not* wanted. It is for C++
    cross-platform mobile projects and has nothing to do with the Android build
    here, which uses the Android SDK and NDK instead.
-2. **[rustup](https://win.rustup.rs)** — the defaults are right
-   (`stable-x86_64-pc-windows-msvc`). Check with `rustc -vV`: `host` must end
-   in `-msvc`. If it says `-gnu`, the linker above will not be used at all —
-   `rustup default stable-x86_64-pc-windows-msvc` fixes it.
+2. **[rustup](https://win.rustup.rs)**, and a toolchain whose host ends in
+   **`-msvc`**. Check it:
+
+   ```powershell
+   rustc -vV        # host: x86_64-pc-windows-msvc
+   ```
+
+   `x86_64-pc-windows-gnu` will not build the app. `webview2-com-sys` links an
+   MSVC-format import library, so a GNU host fails at link time no matter how
+   complete the Visual Studio install is.
+
+   The usual way to end up with the wrong one is **`choco install rust`**,
+   which installs the GNU toolchain and no rustup at all. Replace it:
+
+   ```powershell
+   choco uninstall rust -y
+   choco install rustup.install -y
+   # then, in a NEW terminal so PATH is picked up:
+   rustup default stable-x86_64-pc-windows-msvc
+   rustc -vV
+   where rustc      # ...\.cargo\bin\rustc.exe, not a chocolatey shim
+   ```
+
+   Prefer `rustup.install` over `choco install rust-ms`: the latter gives the
+   right ABI but no rustup, and [Android](#android) needs
+   `rustup target add` for four cross-compilation targets.
 3. **[Node LTS](https://nodejs.org)**.
 4. **WebView2 runtime** — already present on Windows 11 and on Windows 10 since
    version 1803. Only needed on genuinely old installs.
