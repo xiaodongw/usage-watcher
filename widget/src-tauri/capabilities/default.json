@@ -2,5 +2,13 @@
   "identifier": "default",
   "description": "What the panel window may ask the Rust side for on every platform. Tauri v2 denies anything not listed here, and does it silently at runtime rather than at build time — which is how the notification permission went missing the first time.",
   "windows": ["panel", "main"],
-  "permissions": ["core:default", "notification:default"]
+  "permissions": [
+    "core:default",
+    "notification:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "description": "Sign-in consent pages and the providers' own 'get a key here' links. Scoped to https and http rather than left open: `allow-open-url` with no scope would let the webview hand the OS any URL at all, file: and custom schemes included.",
+      "allow": [{ "url": "https://*" }, { "url": "http://*" }]
+    }
+  ]
 }

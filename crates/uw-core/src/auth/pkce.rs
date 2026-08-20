@@ -37,6 +37,15 @@ pub fn random_state() -> String {
     random_urlsafe(32)
 }
 
+/// An unguessable identifier for something that is not a PKCE value: a login
+/// session, a generated daemon token.
+///
+/// Same generator, because "unguessable" is the same requirement and a second
+/// hand-rolled one would only be a second thing to get wrong.
+pub fn random_id() -> String {
+    random_urlsafe(24)
+}
+
 fn random_urlsafe(bytes: usize) -> String {
     let mut buf = vec![0u8; bytes];
     rand::thread_rng().fill_bytes(&mut buf);

@@ -28,6 +28,27 @@ enum Command {
         #[command(subcommand)]
         command: AuthCommand,
     },
+    /// Add and remove the providers being watched.
+    Provider {
+        #[command(subcommand)]
+        command: ProviderCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProviderCommand {
+    /// Show which providers are being watched, and what else could be.
+    List,
+    /// Start watching a provider.
+    Add {
+        provider: String,
+        /// How to authenticate. Defaults to whatever the provider recommends.
+        #[arg(value_enum)]
+        mode: Option<ModeArg>,
+    },
+    /// Stop watching a provider and delete its stored credential.
+    #[command(alias = "rm")]
+    Remove { provider: String },
 }
 
 #[derive(Subcommand)]
@@ -89,6 +110,78 @@ async fn main() -> Result<()> {
     match cli.command {
         None | Some(Command::Status) => status(cli.json).await,
         Some(Command::Auth { command }) => auth(command).await,
+        Some(Command::Provider { command }) => provider(command).await,
+    }
+}
+
+async fn provider(command: ProviderCommand) -> Result<()> {
+    match command {
+        ProviderCommand::List => {
+            let cfg = Config::load()?;
+            for adapter in Any::all() {
+                let info = adapter.info();
+                match cfg.providers.get(adapter.id()) {
+                    Some(p) => {
+                        let signed_in = match adapter.has_credential(p.auth) {
+                            Ok(true) => "signed in",
+                            Ok(false) => "not signed in",
+                            Err(_) => "unusable here",
+                        };
+                        println!("{:<12} {:<16} {signed_in}", adapter.id(), describe(p.auth));
+                    }
+                    None => println!("{:<12} {:<16} {}", adapter.id(), "—", info.summary),
+                }
+            }
+            Ok(())
+        }
+        ProviderCommand::Add { provider, mode } => {
+            let adapter = adapter_for(&provider)?;
+            let pref = mode.map(Into::into).unwrap_or_else(|| adapter.default_auth());
+
+            // Checked before the write: a mode this provider cannot support
+            // would otherwise be saved and only surface later as an error tile.
+            adapter.token_source(pref)?;
+
+            let mut cfg = Config::load()?;
+            let added = cfg.add(&provider, pref);
+            cfg.save()?;
+
+            println!(
+                "{} {provider}, using {}.",
+                if added { "Added" } else { "Updated" },
+                describe(pref)
+            );
+            if pref == AuthPreference::Own && !adapter.has_credential(pref)? {
+                println!("Run `uw auth login {provider}` to sign in.");
+            }
+            if pref == AuthPreference::Token && !adapter.has_credential(pref)? {
+                println!("Run `uw auth token {provider}` to store a key.");
+            }
+            Ok(())
+        }
+        ProviderCommand::Remove { provider } => {
+            let adapter = adapter_for(&provider)?;
+            let mut cfg = Config::load()?;
+            if !cfg.remove(&provider) {
+                println!("{provider} was not being watched.");
+                return Ok(());
+            }
+            cfg.save()?;
+            // Config first, credential second: the reverse order can leave a
+            // provider still polled with its token gone, which is an error the
+            // user cannot clear.
+            adapter.forget_credentials()?;
+            println!("Removed {provider} and deleted its stored credential.");
+            Ok(())
+        }
+    }
+}
+
+fn describe(pref: AuthPreference) -> &'static str {
+    match pref {
+        AuthPreference::Own => "own grant",
+        AuthPreference::Delegated => "delegated",
+        AuthPreference::Token => "pasted token",
     }
 }
 
@@ -105,6 +198,12 @@ async fn status(as_json: bool) -> Result<()> {
             providers,
         };
         println!("{}", serde_json::to_string_pretty(&snap)?);
+    } else if providers.is_empty() {
+        // Not an error, and not a bug: a fresh install watches nothing until
+        // you say what to watch. Silence here reads as breakage.
+        println!("No providers are being watched yet.\n");
+        println!("  uw provider list          see what is available");
+        println!("  uw provider add claude    start watching one");
     } else {
         print_table(&providers);
     }
@@ -128,6 +227,18 @@ async fn auth(command: AuthCommand) -> Result<()> {
             // Driven off the registry so a new adapter shows up here without
             // anyone remembering to add it.
             for adapter in Any::all() {
+                // Providers that were never added are listed rather than
+                // hidden: "why is Codex missing" is a question worth answering
+                // in the same place as "why is Codex failing".
+                if !cfg.is_added(adapter.id()) {
+                    println!(
+                        "{:<16} {:<28} not watched — `uw provider add {}`",
+                        adapter.label(),
+                        "—",
+                        adapter.id()
+                    );
+                    continue;
+                }
                 let pref = adapter.auth_pref(&cfg);
                 let mode = match pref {
                     AuthPreference::Own => "own grant",
@@ -183,11 +294,21 @@ async fn login(provider: &str) -> Result<()> {
     adapter.token_source(AuthPreference::Own)?;
 
     // Logging in only makes sense for an own grant, so flip the toggle rather
-    // than failing with "this provider is in delegated mode".
-    if adapter.auth_pref(&cfg) != AuthPreference::Own {
-        cfg.set_auth_pref(provider, AuthPreference::Own);
+    // than failing with "this provider is in delegated mode" — and add the
+    // provider if it was not being watched at all, because signing in to
+    // something is how you ask for it.
+    //
+    // The `is_added` check is not redundant with the mode check: a provider
+    // whose own default is already `own` (OpenRouter has no CLI to borrow from)
+    // would pass the second and still never be written to the config file.
+    if !cfg.is_added(provider) || adapter.auth_pref(&cfg) != AuthPreference::Own {
+        let added = cfg.add(provider, AuthPreference::Own);
         cfg.save()?;
-        println!("Switched {provider} to its own OAuth grant.\n");
+        if added {
+            println!("Watching {provider}, using its own OAuth grant.\n");
+        } else {
+            println!("Switched {provider} to its own OAuth grant.\n");
+        }
     }
 
     let source = adapter.token_source(AuthPreference::Own)?;
@@ -222,7 +343,7 @@ async fn adopt(provider: &str) -> Result<()> {
     // key is only a copy, and lives under the pasted-token entry so the two
     // never fight over one slot.
     let entry = match target {
-        AuthPreference::Token => format!("{provider}-token"),
+        AuthPreference::Token => adapter.token_entry(),
         _ => provider.to_string(),
     };
     TokenStore::save(&entry, &cred)?;
@@ -257,16 +378,24 @@ async fn store_token(provider: &str) -> Result<()> {
     use std::io::Write;
     use uw_core::auth::{Credential, TokenStore};
 
-    adapter_for(provider)?;
-    match provider {
-        "claude" => {
-            println!("Run `claude setup-token` in another terminal, then paste the token here.")
-        }
-        "openrouter" => println!("Create a key at https://openrouter.ai/settings/keys."),
-        "opencode" => println!("Copy your key from https://opencode.ai/zen."),
-        _ => {}
+    let adapter = adapter_for(provider)?;
+
+    // The prompt comes from the adapter's manifest rather than a `match` here,
+    // so the terminal and the config screen tell you to look in the same place.
+    let prompt = adapter
+        .info()
+        .methods
+        .into_iter()
+        .find_map(|m| m.token)
+        .with_context(|| {
+            format!("`{provider}` cannot use a pasted token — run `uw auth login {provider}`")
+        })?;
+
+    println!("{}", prompt.help);
+    if let Some(url) = &prompt.url {
+        println!("{url}");
     }
-    print!("Token: ");
+    print!("{}: ", prompt.label);
     std::io::stdout().flush()?;
 
     let mut line = String::new();
@@ -279,7 +408,7 @@ async fn store_token(provider: &str) -> Result<()> {
     // No expiry recorded: these are long-lived by design and carry no refresh
     // token, so there is nothing to refresh and nothing to rotate.
     TokenStore::save(
-        &format!("{provider}-token"),
+        &adapter.token_entry(),
         &Credential {
             access_token: token,
             refresh_token: None,
@@ -289,7 +418,7 @@ async fn store_token(provider: &str) -> Result<()> {
     )?;
 
     let mut cfg = Config::load()?;
-    cfg.set_auth_pref(provider, AuthPreference::Token);
+    cfg.add(provider, AuthPreference::Token);
     cfg.save()?;
 
     println!("Stored. {provider} now uses that token.");

@@ -11,6 +11,7 @@ of them. This is what each one needs, and where it has to be built.
 - [Android](#android)
 - [iOS](#ios)
 - [GNOME extension](#gnome-extension)
+- [Portable zips](#portable-zips)
 - [Release builds](#release-builds)
 - [Troubleshooting](#troubleshooting)
 
@@ -31,11 +32,19 @@ representative of a real desktop. Linux users want the GNOME extension instead.
 
 Two things follow from this table and are worth internalising before you start:
 
-**The daemon and the UI do not have to be on the same machine.** `uwd` belongs
-wherever the credentials and the vendor CLIs are — inside WSL, in the usual
-setup — and every viewer reads it over HTTP. So you build `uwd` once in WSL and
-the widget natively on Windows, and they talk over `localhost` because WSL2
-forwards it.
+**The desktop app contains the collector.** `widget/src-tauri` links `uwd` as a
+library, so building the app also builds the whole daemon and its dependency
+tree — a first build is noticeably longer than it was, and needs nothing extra
+beyond the platform webview toolchain. The mobile targets do not link it: a
+phone stays a viewer.
+
+**The daemon and the UI still do not have to be on the same machine.** `uwd`
+belongs wherever the credentials and the vendor CLIs are — inside WSL, in the
+usual setup — and every viewer reads it over HTTP. So you build `uwd` once in
+WSL and the widget natively on Windows, leave the panel's address blank or point
+it at the WSL one, and they talk over `localhost` because WSL2 forwards it. When
+the app finds a collector already listening on the configured port it uses that
+one instead of starting a second.
 
 **`widget/src-tauri` is deliberately not a workspace member.** The root
 `Cargo.toml` excludes it. That is what keeps `cargo test --workspace` green on a
@@ -400,6 +409,36 @@ must log out and back in**, because the shell cannot reload itself in place —
 and <kbd>Alt</kbd>+<kbd>F2</kbd> there silently does nothing, which is an easy
 hour to lose.
 
+## Portable zips
+
+What a user should be given: unzip, double-click, done. No installer, no
+elevation prompt, nothing left behind when the folder is deleted.
+
+```sh
+scripts/package.sh                                        # macOS, Linux, WSL
+powershell -ExecutionPolicy Bypass -File scripts\package.ps1   # Windows
+```
+
+Each builds the panel, the app (`tauri build --no-bundle`, so you get the bare
+executable rather than an installer around it), and both command-line binaries,
+then writes `dist/usage-watcher-<version>-<platform>.zip` containing:
+
+| | |
+|---|---|
+| `usage-watcher` | the app — tray icon, panel, and the collector inside it |
+| `uw` | one-shot read from a terminal |
+| `uwd` | the collector alone, for a headless box or WSL |
+| `README.txt` | what to double-click, and where the settings live |
+
+There is no cross-compiling here either: each zip is built on its own OS.
+
+Unsigned, which is worth being honest about. Windows SmartScreen will warn on
+first run ("More info" → "Run anyway") and macOS Gatekeeper will refuse until
+the binary is opened from the context menu once, or cleared with
+`xattr -d com.apple.quarantine usage-watcher`. Signing is a certificate and a
+notarisation pipeline, neither of which makes the app work better for the person
+who built it.
+
 ## Release builds
 
 ```sh
@@ -431,6 +470,19 @@ this up front; if you invoked `tauri android` directly, it does not.
 **`cargo test --workspace` tries to build the Tauri app** — it should not; the
 root `Cargo.toml` excludes `widget/src-tauri`. If it does, you are running
 Cargo from inside `widget/src-tauri`, which is its own workspace.
+
+**The app starts but the panel says *Cannot reach uwd*** — the embedded
+collector failed to start, and it logs why. Run the executable from a terminal
+with `UWD_LOG=debug` and read the first few lines: the usual causes are a
+`config.toml` that no longer parses and a `[daemon] bind` pointing at an address
+this machine does not have. It falls back to an ephemeral port when the
+configured one is merely busy, so "port in use" is not one of them.
+
+**Two copies of everything, or every provider polled twice** — a second
+collector is running. The app probes `/health` on the configured port before
+starting its own and defers to whatever answers, but a `uwd` bound somewhere
+*else* is invisible to that check. Either stop it, or leave it running and point
+the panel at it in Providers → Daemon settings.
 
 **The panel says *Cannot reach uwd* but `curl` inside WSL works** — WSL2
 localhost forwarding has broken, which happens after some Windows updates and

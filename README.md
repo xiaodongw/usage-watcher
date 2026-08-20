@@ -7,21 +7,22 @@ One collector, several viewers:
 
 | | what it is | where it runs |
 |---|---|---|
-| `uwd` | collector daemon — polls, alerts, serves `/snapshot` + `/events` | wherever the credentials are |
-| `uw` | CLI — one-shot read, and all the auth commands | same |
-| `widget/` | Vue panel in a Tauri shell | Windows and macOS tray, Android and iOS |
+| `uwd` | collector — polls, alerts, serves the API | wherever the credentials are |
+| `uw` | CLI — one-shot read, and every auth command | same |
+| `widget/` | Vue panel in a Tauri shell, **with the collector inside it** | Windows and macOS tray, Android and iOS |
 | `gnome-extension/` | GNOME Shell panel indicator | Linux |
 
-The daemon is the product. Everything else is a read-only viewer over the same
-JSON, holding no credentials and doing no polling — which is what lets the UI
-run on Windows, or on a phone, while the credentials and vendor CLIs stay inside
-WSL.
+The collector is the product; everything else is a viewer over the same JSON.
+On the desktop the app links `uwd` as a library and runs it in-process, so there
+is one file to launch. That is not a different daemon — it is the same code,
+reached the same way over loopback — which is what still lets the panel run on
+Windows against a collector inside WSL, or on a phone against your desktop.
 
 ```
-                                  ┌─ tray widget (Windows, macOS)
-uwd ──/snapshot + /events (SSE) ──┼─ GNOME extension (Linux)
- │                                ├─ phone app (Android, iOS)
- │                                └─ uw --json
+                                  ┌─ tray widget (Windows, macOS) ─┐
+uwd ──/snapshot + /events (SSE) ──┼─ GNOME extension (Linux)       │ usually the
+ │                                ├─ phone app (Android, iOS)      │ same process
+ │                                └─ uw --json                     ┘
  └── Claude · Codex · opencode · OpenRouter
 ```
 
@@ -30,20 +31,39 @@ Build prerequisites for every target and host are in
 
 ## Quick start
 
+### From a release
+
+Unzip it and double-click **usage-watcher**. Nothing to install, nothing to
+start first. It puts an icon in the tray; click that for the panel.
+
+The first screen is empty with an **Add provider** button. Pick a provider, pick
+how to sign in — the choices, and which of them work on this machine, come from
+the provider itself — and it walks you through the rest. A browser sign-in opens
+your real browser and the panel waits for you to come back.
+
+`uw` and `uwd` are in the same folder for anyone who wants a terminal or a
+headless box, and neither needs installing.
+
+### From source
+
+```sh
+scripts/package.sh                     # or scripts\package.ps1 on Windows
+```
+
+…which builds the panel, the app and both binaries and leaves a zip in `dist/`.
+
+To develop against it instead:
+
 ```sh
 cargo install --path crates/uw-cli     # the `uw` command; --force to update
+uw provider add claude                 # or do it from the panel
 uw auth login claude                   # own OAuth grant, refreshed by us
-uw auth login codex                    # needs port 1455 free — no `codex login` running
-uw auth login openrouter               # browser consent, mints a key for us
 uw                                     # one-shot read
 
-cargo run -p uwd                       # daemon on http://127.0.0.1:7878
+cargo run -p uwd                       # collector on http://127.0.0.1:7878
 npm --prefix widget install
 npm --prefix widget run dev            # panel at http://localhost:5173
 ```
-
-opencode needs no login: it keeps a static API key on disk and the default
-`delegated` mode reads it.
 
 The version never changes during development, so `cargo install` refuses to
 replace an existing `uw` and you keep running the old one — which shows up as a
@@ -82,7 +102,9 @@ before reading a tile:
 
 Adding a provider means one file in `crates/uw-core/src/providers/` and one arm
 in the `Any` enum beside it. Everything downstream — the CLI table, the panel,
-alerting, the schedule — is driven off that registry and needs no edit.
+the "Add provider" screen, alerting, the schedule — is driven off that registry
+and needs no edit. See
+[docs/ADDING-A-PROVIDER.md](docs/ADDING-A-PROVIDER.md).
 
 ## Running it in WSL
 
@@ -142,7 +164,11 @@ address, is identical.
 
 ## Auth modes
 
-Set per provider with `uw auth mode <provider> <mode>`:
+Chosen when you add a provider, in the panel or with
+`uw auth mode <provider> <mode>`. The panel offers only the modes that provider
+actually supports, and greys out the ones that cannot work on this machine with
+the reason attached — "Codex is not signed in on this machine" rather than a
+disabled row with no explanation.
 
 - **`own`** — our own OAuth grant and our own refresh token. The only mode that
   works where the vendor CLI does not exist, which is what a phone needs.
@@ -176,9 +202,19 @@ served over HTTP.
 
 ## Configuration
 
-`~/.config/usage-watcher/config.toml`:
+`~/.config/usage-watcher/config.toml` — written by the config screen as well as
+by hand.
+
+**Being in `[providers]` is what "added" means.** An id that is not a key in
+that table is not polled and does not appear in the panel, which is why a fresh
+install opens on an empty screen rather than on four tiles nobody asked for. A
+config file written before this change is migrated on first read: everything
+that used to be implicitly on gets written down explicitly, so nothing stops
+being watched.
 
 ```toml
+version = 1               # written for you; see the migration note above
+
 [daemon]
 bind = "127.0.0.1:7878"   # non-loopback requires `token`, or uwd refuses to start
 # token = "…"             # also accepted as ?token= , since EventSource cannot set headers
@@ -194,12 +230,31 @@ enabled = true
 auth = "delegated"        # reads the key `opencode auth login` stored
 
 [providers.openrouter]
-enabled = false           # drop a provider you do not use, rather than
-                          # leaving a permanent "not signed in" tile
+enabled = false           # keep the credential, stop the polling — what you
+                          # want while a provider is having an outage
 ```
 
-Every provider is enabled by default, so an account you have not set up shows as
-an error tile until you either sign in or switch it off.
+Nothing secret is in there. Credentials go to the Windows Credential Manager,
+the macOS Keychain, or an owner-only `0600` file on Linux, and removing a
+provider deletes its credential along with its entry — so "remove" means removed
+rather than merely hidden. `enabled = false` is the other half of that pair:
+everything kept, nothing polled.
+
+Two ways to change it, and they do the same thing:
+
+```sh
+uw provider list                  # what is watched, and what else could be
+uw provider add openrouter        # `own`, `delegated` or `token` as a second argument
+uw provider remove openrouter     # config entry and credential both
+```
+
+The collector reads this file at startup and then owns it. Editing it by hand
+while `uwd` is running is fine, but the change lands on the next restart —
+whereas anything done from the panel or through the API takes effect at once,
+including starting or stopping that provider's polling.
+
+A provider you have added but not signed in to shows as an error tile until you
+do. Remove it, or switch it off, if you were only trying it.
 
 Claude's usage endpoint is rate limited more tightly than the others, and a 429
 there is normal rather than alarming. The daemon absorbs it: the first two
@@ -219,15 +274,39 @@ interval_active = 180
 
 ## API
 
+Reading:
+
 | route | |
 |---|---|
 | `GET /snapshot` | current reading, all providers |
-| `GET /events` | SSE; `snapshot` on every poll, `alert` on a severity increase |
+| `GET /events` | SSE; `snapshot` per poll, `alert` on a severity increase, `providers` on a config change |
 | `GET /history?since=` | recent snapshots from the ring |
 | `GET /health` | unauthenticated liveness |
 
+Writing — what the config screen drives:
+
+| route | |
+|---|---|
+| `GET /providers` | the catalogue, and what is configured |
+| `POST /providers` | `{id, auth}` — add, or change how one authenticates |
+| `DELETE /providers/{id}` | remove, and delete its stored credential |
+| `POST /providers/{id}/login` | begin a browser sign-in; returns the URL to open |
+| `GET /providers/{id}/login` | how that sign-in is going |
+| `POST /providers/{id}/login/code` | `{session, code}` for a provider that shows a code |
+| `POST /providers/{id}/token` | `{token}` — store a pasted key |
+| `POST /providers/{id}/logout` | forget the credential, keep the provider |
+
 Alerts are edge-triggered — one notification when a meter crosses into warning
 or critical, not one per poll for the next four hours.
+
+The two halves have deliberately different CORS policies. Reading stays open to
+any origin: it is a GET of data holding no secrets, so a scratch HTML file can
+chart your usage. Writing does not, because those routes mint and delete
+credentials — a page on some unrelated site must not reach them merely because
+your collector is on loopback. They accept only origins that are plausibly this
+app (the Tauri webview, or something served from localhost), and a bearer token
+is still required off loopback because `uwd` will not bind a public address
+without one.
 
 ## Viewers
 
@@ -247,11 +326,13 @@ check a change before building anything native.
 [docs/BUILDING.md](docs/BUILDING.md)** — SDKs, system packages, environment
 variables, and which combinations are impossible (iOS off a Mac, chiefly).
 
-The daemon address is a **runtime** setting — the gear in the header — stored
-per install. `VITE_UWD_URL` and `VITE_UWD_TOKEN` still work, but they are only
-the initial default now. That change is what makes the phone builds possible:
-the same signed binary has to reach a daemon whose address the user only learns
-after installing it.
+The daemon address is a **runtime** setting, stored per install and reachable
+from Providers → Daemon settings. Leave it blank and the panel uses whatever
+collector the app started — which may be on an ephemeral port, if something else
+already held 7878. Fill it in to watch a collector on another machine.
+`VITE_UWD_URL` and `VITE_UWD_TOKEN` still work as the initial default. All of
+this is what makes the phone builds possible: the same signed binary has to
+reach a daemon whose address the user only learns after installing it.
 
 ### The tray shells
 

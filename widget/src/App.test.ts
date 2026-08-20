@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import App from "./App.vue";
 import { DEFAULTS, settings } from "./lib/settings";
+import { providersView } from "./lib/providers";
+import type { ProvidersView } from "./types/ProvidersView";
 import type { Snapshot } from "./types/Snapshot";
 
 /**
@@ -72,6 +74,70 @@ const SNAPSHOT: Snapshot = {
   ],
 };
 
+/**
+ * The provider manifest, as the daemon builds it from the adapters. Only the
+ * fields the UI actually renders — the point of the manifest is that the UI
+ * does not know what a "claude" is.
+ */
+const CATALOGUE: ProvidersView = {
+  catalogue: [
+    {
+      id: "claude",
+      label: "Claude Code",
+      summary: "Session and weekly windows.",
+      accent: "#d97757",
+      methods: [
+        {
+          auth: "own",
+          kind: "browser",
+          label: "Sign in with your browser",
+          detail: "usage-watcher gets its own credential.",
+          recommended: false,
+          available: true,
+        },
+        {
+          auth: "delegated",
+          kind: "borrow",
+          label: "Use the Claude Code sign-in",
+          detail: "Reads the CLI's file, read-only.",
+          recommended: true,
+          available: false,
+          unavailable_reason: "Claude Code is not signed in on this machine.",
+        },
+        {
+          auth: "token",
+          kind: "paste",
+          label: "Paste a long-lived token",
+          detail: "Run `claude setup-token`.",
+          recommended: false,
+          available: true,
+          token: {
+            action: "Paste a long-lived token",
+            label: "Token",
+            placeholder: "sk-ant-oat01-…",
+            help: "Run `claude setup-token` and paste what it prints.",
+          },
+        },
+      ],
+    },
+  ],
+  configured: [],
+};
+
+const CONFIGURED: ProvidersView = {
+  ...CATALOGUE,
+  configured: [
+    {
+      id: "claude",
+      label: "Claude Code",
+      accent: "#d97757",
+      auth: "own",
+      enabled: true,
+      signed_in: true,
+    },
+  ],
+};
+
 // Without this, every App mounted by an earlier case stays alive with its
 // watcher attached to the shared `settings` singleton — so changing the address
 // in one test redials in all of them.
@@ -85,6 +151,12 @@ beforeEach(() => {
   // whatever address the previous one dialled.
   localStorage.clear();
   settings.value = { ...DEFAULTS };
+  // Another module singleton, shared by the panel and the config screens.
+  providersView.value = null;
+  // Nothing here should reach the network. Without this the provider store
+  // would happily talk to a real daemon on the developer's own machine, and
+  // the suite would pass or fail depending on whether one was running.
+  vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("no network in tests"))));
 });
 
 describe("App", () => {
@@ -139,17 +211,18 @@ describe("App", () => {
     expect(w.text()).toContain("Cannot reach uwd");
   });
 
-  it("opens the settings screen from the header, and closes it again", async () => {
+  it("opens the provider list from the header, and closes it again", async () => {
     const w = mount(App);
+    providersView.value = CONFIGURED;
     FakeEventSource.last!.emit("snapshot", SNAPSHOT);
     await flushPromises();
 
     await w.find(".gear").trigger("click");
-    expect(w.text()).toContain("Address");
+    expect(w.text()).toContain("Providers");
     // The tiles are replaced, not merely covered.
     expect(w.findAll(".tile")).toHaveLength(0);
 
-    await w.findAll("button").find((b) => b.text() === "Close")!.trigger("click");
+    await w.find(".bar .link").trigger("click");
     expect(w.findAll(".tile")).toHaveLength(2);
   });
 
@@ -161,6 +234,71 @@ describe("App", () => {
     expect(w.text()).toContain("Cannot reach uwd");
     await w.find(".empty .link").trigger("click");
     expect(w.text()).toContain("Address");
+  });
+
+  it("offers to add a provider when none is configured", async () => {
+    // The first screen anyone sees. A panel that is merely blank reads as
+    // broken, and the one useful thing to do from here is add something.
+    const w = mount(App);
+    providersView.value = CATALOGUE;
+    FakeEventSource.last!.emit("snapshot", { generated_at: new Date().toISOString(), providers: [] });
+    await flushPromises();
+
+    expect(w.text()).toContain("Nothing is being watched yet");
+    await w.find(".welcome .primary").trigger("click");
+    expect(w.text()).toContain("Add a provider");
+  });
+
+  it("builds the add screen from the daemon's manifest, not from a hard-coded list", async () => {
+    const w = mount(App);
+    providersView.value = CATALOGUE;
+    FakeEventSource.last!.emit("snapshot", { generated_at: new Date().toISOString(), providers: [] });
+    await flushPromises();
+
+    await w.find(".welcome .primary").trigger("click");
+    expect(w.text()).toContain("Claude Code");
+    expect(w.text()).toContain("Session and weekly windows.");
+
+    // Two usable methods, so it asks rather than guessing. (With only one it
+    // goes straight there — confirming a choice you had no alternative to is
+    // a wasted screen.)
+    await w.find(".card").trigger("click");
+    expect(w.text()).toContain("Sign in with your browser");
+    // An unavailable method is shown with its reason rather than hidden —
+    // "why can I not borrow the CLI token" is the question it answers.
+    expect(w.text()).toContain("not signed in on this machine");
+    expect(w.findAll("button.method.off")).toHaveLength(1);
+  });
+
+  it("picks up a provider list pushed over the stream", async () => {
+    // How a browser sign-in lands on screen: it completes on the daemon long
+    // after the request that started it was answered.
+    const w = mount(App);
+    FakeEventSource.last!.emit("snapshot", SNAPSHOT);
+    await flushPromises();
+    await w.find(".gear").trigger("click");
+
+    FakeEventSource.last!.emit("providers", CONFIGURED);
+    await flushPromises();
+
+    expect(w.text()).toContain("Claude Code");
+    expect(w.findAll(".row")).toHaveLength(1);
+  });
+
+  it("asks before deleting a credential, which cannot be undone", async () => {
+    const w = mount(App);
+    providersView.value = CONFIGURED;
+    FakeEventSource.last!.emit("snapshot", SNAPSHOT);
+    await flushPromises();
+    await w.find(".gear").trigger("click");
+
+    await w.find(".trash").trigger("click");
+    expect(w.text()).toContain("delete its stored credential");
+    // Still there: the click armed the confirmation, it did not act.
+    expect(w.findAll(".row")).toHaveLength(1);
+
+    await w.findAll("button").find((b) => b.text() === "Cancel")!.trigger("click");
+    expect(w.text()).not.toContain("delete its stored credential");
   });
 
   it("redials when the daemon address changes", async () => {

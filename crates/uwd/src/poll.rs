@@ -84,7 +84,20 @@ pub async fn run(
     let mut failures: u32 = 0;
 
     loop {
-        let delay = match poller.poll(&http).await {
+        // Shutdown races the poll itself, not just the sleep. Two reasons: a
+        // provider removed in the UI must not have an in-flight request write
+        // its tile back into the hub afterwards, and the caller doing the
+        // removing is an HTTP handler that cannot sit through a 20-second
+        // timeout waiting for this task to notice.
+        let outcome = tokio::select! {
+            r = poller.poll(&http) => r,
+            _ = shutdown.changed() => {
+                tracing::debug!(provider = id, "stopping mid-poll");
+                return;
+            }
+        };
+
+        let delay = match outcome {
             Ok(reading) => {
                 failures = 0;
                 let next = schedule.for_reading(&reading);

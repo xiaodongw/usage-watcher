@@ -2,6 +2,8 @@ import { ref, shallowRef, onUnmounted, watch, type Ref } from "vue";
 import type { Snapshot } from "../types/Snapshot";
 import type { Alert } from "../types/Alert";
 import { daemonUrl, settings } from "./settings";
+import { applyProviders, refreshProviders } from "./providers";
+import type { ProvidersView } from "../types/ProvidersView";
 
 export type Connection = "connecting" | "live" | "offline";
 
@@ -49,6 +51,11 @@ export function useDaemon(onAlert?: (a: Alert) => void): DaemonFeed {
     source.addEventListener("open", () => {
       connection.value = "live";
       everConnected.value = true;
+      // The provider list is not part of the snapshot — it is configuration
+      // rather than data — so it has to be fetched once per connection. Doing
+      // it here rather than on mount means reconnecting to a *different*
+      // daemon picks up that daemon's providers.
+      void refreshProviders();
     });
 
     source.addEventListener("snapshot", (e) => {
@@ -59,6 +66,14 @@ export function useDaemon(onAlert?: (a: Alert) => void): DaemonFeed {
 
     source.addEventListener("alert", (e) => {
       onAlert?.(JSON.parse((e as MessageEvent).data) as Alert);
+    });
+
+    // Pushed whenever a provider is added, removed, or finishes signing in.
+    // The last of those is the one that matters: a browser login completes on
+    // the daemon minutes after the request that started it returned, and this
+    // is the only way the config screen hears about it.
+    source.addEventListener("providers", (e) => {
+      applyProviders(JSON.parse((e as MessageEvent).data) as ProvidersView);
     });
 
     source.addEventListener("error", () => {

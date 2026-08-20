@@ -18,12 +18,22 @@ license = "MIT"
 name = "usage_watcher_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Named explicitly, and not after the package. This is the file someone
+# double-clicks after unzipping, so it has to read as the product rather than
+# as a crate — `usage-watcher.exe`, not `usage-watcher-widget.exe`.
+[[bin]]
+name = "usage-watcher"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2" }
 tauri-plugin-notification = "2"
+# Opening the OAuth consent page in the user's real browser. It has to be the
+# real one: the webview has no session with the provider.
+tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
@@ -36,6 +46,17 @@ serde_json = "1"
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
+
+# The collector, linked in rather than shipped as a second executable — see
+# `src/daemon.rs`. Desktop only: the mobile builds have no keychain integration
+# and no loopback redirect to catch an OAuth callback on, so a phone stays a
+# viewer of a daemon somewhere else.
+uwd = { path = "../../crates/uwd" }
+# `reqwest` is reached through `uw_core::reqwest` rather than depended on
+# directly, so there can only ever be one version of it in the binary.
+uw-core = { path = "../../crates/uw-core" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
 opt-level = "z"

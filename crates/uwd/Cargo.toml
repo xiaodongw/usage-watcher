@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+name = "uwd"
+path = "src/lib.rs"
+
 [[bin]]
 name = "uwd"
 path = "src/main.rs"
@@ -20,6 +24,7 @@ chrono.workspace = true
 tracing.workspace = true
 
 axum = "0.8"
+url.workspace = true
 tokio-stream = { version = "0.1", features = ["sync"] }
 tower-http = { version = "0.6", features = ["cors"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -28,4 +33,5 @@ ts-rs = { version = "10", features = ["chrono-impl"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+serde_json.workspace = true
 http-body-util = "0.1"

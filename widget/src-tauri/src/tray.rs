@@ -5,15 +5,23 @@
 //! ago — Linux gets `gnome-extension/` instead, which is a first-class panel
 //! indicator rather than a webview pretending to be one.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{App, AppHandle, Manager, PhysicalPosition, Rect, WebviewWindow};
+use tauri::{App, AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Rect, WebviewWindow};
 
 /// Gap between the tray icon and the panel edge, in physical pixels.
 const MARGIN: i32 = 8;
+
+/// The popover, sized to a glance.
+const PANEL_SIZE: (f64, f64) = (340.0, 300.0);
+
+/// The config screens, sized to a list plus a form. Taller rather than wider:
+/// the provider rows are short and the login screen is mostly prose.
+const CONFIG_SIZE: (f64, f64) = (380.0, 520.0);
 
 /// How recently an auto-hide has to have happened for a tray click to be
 /// treated as the cause of it.
@@ -25,12 +33,31 @@ const MARGIN: i32 = 8;
 const HIDE_DEBOUNCE: Duration = Duration::from_millis(300);
 
 /// Shared between the window-event handler and the tray click handler.
-#[derive(Default)]
 pub struct Panel {
     last_auto_hide: Mutex<Option<Instant>>,
+    /// Whether losing focus should dismiss the panel.
+    ///
+    /// True while it is a tray popover, false on the config screens. Not a
+    /// preference: a browser sign-in *requires* the user to click away to
+    /// another window, and a popover that dismissed itself at that moment would
+    /// take the code field with it — the one thing they have to come back to.
+    auto_hide: AtomicBool,
+}
+
+impl Default for Panel {
+    fn default() -> Self {
+        Panel {
+            last_auto_hide: Mutex::new(None),
+            auto_hide: AtomicBool::new(true),
+        }
+    }
 }
 
 impl Panel {
+    pub fn auto_hides(&self) -> bool {
+        self.auto_hide.load(Ordering::Relaxed)
+    }
+
     /// Record that the panel hid itself because it lost focus.
     pub fn note_auto_hide(&self) {
         if let Ok(mut g) = self.last_auto_hide.lock() {
@@ -63,8 +90,10 @@ pub fn build(app: &App) -> tauri::Result<()> {
     let handle = app.handle();
 
     let show = MenuItem::with_id(app, "show", "Show panel", true, None::<&str>)?;
+    let configure = MenuItem::with_id(app, "configure", "Configure…", true, None::<&str>)?;
+    let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &configure, &sep, &quit])?;
 
     let tray = TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().unwrap().clone())
@@ -80,6 +109,15 @@ pub fn build(app: &App) -> tauri::Result<()> {
             "show" => {
                 if let Some(w) = window(app) {
                     show_panel(&w);
+                }
+            }
+            "configure" => {
+                if let Some(w) = window(app) {
+                    show_panel(&w);
+                    // The frontend owns which screen is showing, so this asks
+                    // rather than tells. It also flips the window out of
+                    // popover mode, via the `set_panel_mode` command.
+                    let _ = w.emit("navigate", "providers");
                 }
             }
             "quit" => app.exit(0),
@@ -179,6 +217,47 @@ fn place_at_tray(w: &WebviewWindow, rect: Rect) -> tauri::Result<()> {
     };
 
     w.set_position(PhysicalPosition::new(x, y))
+}
+
+/// Switch the window between tray popover and settings window.
+///
+/// Called by the frontend whenever it changes screen. The two modes differ in
+/// size and, more importantly, in whether losing focus dismisses the window —
+/// see [`Panel::auto_hide`].
+#[tauri::command]
+pub fn set_panel_mode(window: WebviewWindow, panel: tauri::State<'_, Panel>, mode: String) {
+    let config = mode == "config";
+    panel.auto_hide.store(!config, Ordering::Relaxed);
+
+    let (w, h) = if config { CONFIG_SIZE } else { PANEL_SIZE };
+    if window.set_size(LogicalSize::new(w, h)).is_ok() {
+        // Growing a window anchored under a tray icon pushes its bottom edge
+        // off the screen, which on Windows means the buttons are simply not
+        // there. Pull it back on.
+        let _ = clamp_into_monitor(&window);
+    }
+}
+
+/// Nudge the window until it is fully on the monitor it is mostly on.
+fn clamp_into_monitor(w: &WebviewWindow) -> tauri::Result<()> {
+    let Some(monitor) = w.current_monitor()?.or(w.primary_monitor()?) else {
+        return Ok(());
+    };
+    let (mp, ms) = (monitor.position(), monitor.size());
+    let pos = w.outer_position()?;
+    let size = w.outer_size()?;
+
+    let max_x = mp.x + ms.width as i32 - size.width as i32 - MARGIN;
+    let max_y = mp.y + ms.height as i32 - size.height as i32 - MARGIN;
+    // `max` before `min`: on a screen smaller than the window, the top-left
+    // corner is the one worth keeping.
+    let x = pos.x.min(max_x).max(mp.x + MARGIN);
+    let y = pos.y.min(max_y).max(mp.y + MARGIN);
+
+    if (x, y) != (pos.x, pos.y) {
+        w.set_position(PhysicalPosition::new(x, y))?;
+    }
+    Ok(())
 }
 
 /// Update what the tray shows at a glance.

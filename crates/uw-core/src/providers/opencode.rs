@@ -33,7 +33,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-use super::Adapter;
+use super::{Adapter, AuthPreference, Spec};
 use crate::auth::{Credential, OAuthConfig};
 use crate::model::{AuthKind, Meter, Provider, Severity, Status};
 
@@ -57,12 +57,14 @@ impl Adapter for Opencode {
         "opencode"
     }
 
+    /// The message matters as much as the failure: it is what the config
+    /// screen shows in place of a greyed-out "Sign in with your browser", so
+    /// it has to name the alternative without assuming a terminal.
     fn oauth_config(&self) -> Result<OAuthConfig> {
         bail!(
-            "opencode issues API keys from its web console, not by OAuth, so there \
-             is no `login` step. Either leave this provider on auth = \"delegated\" \
-             to read the key the opencode CLI already stored, or run \
-             `uw auth token opencode` and paste a key from https://opencode.ai/zen"
+            "opencode issues API keys from its web console rather than by OAuth, \
+             so there is no browser sign-in. Borrow the opencode CLI's key, or \
+             paste one from https://opencode.ai/zen"
         )
     }
 
@@ -75,6 +77,36 @@ impl Adapter for Opencode {
                 .join("opencode")
                 .join("auth.json"),
         )
+    }
+
+    fn spec(&self) -> Spec {
+        Spec::new(
+            "opencode Zen Go — rolling, weekly and monthly usage windows.",
+            "#6366f1",
+        )
+        .vendor_cli("opencode")
+        .docs("https://opencode.ai/zen")
+        .token(
+            "Paste an API key",
+            "API key",
+            "sk-…",
+            "Copy a key from the opencode Zen console.",
+            Some("https://opencode.ai/zen"),
+        )
+    }
+
+    fn read_delegated(&self, path: &Path) -> Result<Credential> {
+        read_delegated(path)
+    }
+
+    fn read_full_credential(&self, path: &Path) -> Result<Credential> {
+        read_full_credential(path)
+    }
+
+    /// A static key, so adopting it is a copy rather than a transfer — the
+    /// opencode CLI carries on using its own and nothing rotates.
+    fn adopt_as(&self) -> Option<AuthPreference> {
+        Some(AuthPreference::Token)
     }
 
     async fn fetch(
@@ -430,8 +462,25 @@ mod tests {
     }
 
     #[test]
-    fn there_is_no_login_and_the_error_says_what_to_do_instead() {
+    fn there_is_no_login_and_the_error_names_the_alternative() {
+        // This string is not only a CLI error: it is what the config screen
+        // shows in place of a greyed-out "Sign in with your browser", so it
+        // has to point somewhere without assuming a terminal.
         let err = Opencode.oauth_config().unwrap_err().to_string();
-        assert!(err.contains("uw auth token opencode"), "{err}");
+        assert!(err.contains("https://opencode.ai/zen"), "{err}");
+        assert!(!err.contains("uw auth"), "assumes a terminal: {err}");
+    }
+
+    #[test]
+    fn the_manifest_offers_a_paste_but_never_a_browser_login() {
+        use crate::providers::LoginKind;
+        let info = crate::providers::Any::Opencode(Opencode).info();
+        let browser = info.methods.iter().find(|m| m.kind == LoginKind::Browser).unwrap();
+        assert!(!browser.available);
+        assert!(browser.unavailable_reason.is_some());
+
+        let paste = info.methods.iter().find(|m| m.kind == LoginKind::Paste).unwrap();
+        assert!(paste.available);
+        assert!(paste.token.is_some(), "a paste method with no field to paste into");
     }
 }

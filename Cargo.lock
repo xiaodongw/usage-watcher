@@ -1864,6 +1864,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ts-rs",
+ "url",
  "uw-core",
 ]
 

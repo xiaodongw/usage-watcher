@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-use super::Adapter;
+use super::{Adapter, AuthPreference, Spec};
 use crate::auth::{Credential, Flow, OAuthConfig, RedirectMode, TokenBody};
 use crate::model::{AuthKind, Meter, MeterKind, Provider, Severity, Status};
 
@@ -105,6 +105,47 @@ impl Adapter for Claude {
 
     fn delegated_path(&self) -> Option<PathBuf> {
         Some(dirs::home_dir()?.join(".claude").join(".credentials.json"))
+    }
+
+    fn spec(&self) -> Spec {
+        Spec::new(
+            "Claude Code — the 5-hour session window, the weekly limits, and \
+             the per-model weekly caps.",
+            "#d97757",
+        )
+        .vendor_cli("Claude Code")
+        .docs("https://claude.com/product/claude-code")
+        .token(
+            "Paste a long-lived token",
+            "Token",
+            "sk-ant-oat01-…",
+            "Run `claude setup-token` and paste what it prints — a one-year \
+             token, and the path Anthropic documents for machines with no browser.",
+            None,
+        )
+    }
+
+    /// A minute is worth it here and almost nowhere else: the 5-hour window is
+    /// the meter people actually watch, and it can move several percent in that
+    /// time during a heavy session.
+    fn poll_intervals(&self) -> (u64, u64) {
+        (60, 300)
+    }
+
+    fn read_delegated(&self, path: &Path) -> Result<Credential> {
+        read_delegated(path)
+    }
+
+    fn read_full_credential(&self, path: &Path) -> Result<Credential> {
+        read_full_credential(path)
+    }
+
+    fn adopt_as(&self) -> Option<AuthPreference> {
+        Some(AuthPreference::Own)
+    }
+
+    fn relogin_hint(&self) -> Option<&'static str> {
+        Some("claude auth login")
     }
 
     /// The plan name is not on the usage endpoint and not in the token

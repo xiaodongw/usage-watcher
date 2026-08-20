@@ -41,6 +41,11 @@ pub struct Alert {
 pub enum Event {
     Snapshot(Snapshot),
     Alert(Alert),
+    /// The set of configured providers changed. Sent so a config screen open
+    /// in one viewer updates when another adds or removes something — and,
+    /// more usefully, the moment a browser login completes, which happens
+    /// outside the request that started it.
+    Providers(crate::api::ProvidersView),
 }
 
 pub struct Hub {
@@ -151,6 +156,26 @@ impl Hub {
             inner.push_history(snap, self.history_cap);
         }
         self.broadcast_current(Vec::new()).await;
+    }
+
+    /// Drop a provider entirely: it has been removed, not merely failed.
+    ///
+    /// Everything keyed by the id goes, the remembered severities included —
+    /// otherwise adding the provider back would start out unable to alert on a
+    /// meter it had already warned about before it was removed.
+    pub async fn forget(&self, id: &str) {
+        {
+            let mut inner = self.inner.write().await;
+            inner.providers.remove(id);
+            inner.failures.remove(id);
+            inner.severities.retain(|(p, _), _| p != id);
+        }
+        self.broadcast_current(Vec::new()).await;
+    }
+
+    /// Push a non-snapshot event to every viewer.
+    pub fn publish(&self, event: Event) {
+        let _ = self.tx.send(event);
     }
 
     async fn broadcast_current(&self, alerts: Vec<Alert>) {

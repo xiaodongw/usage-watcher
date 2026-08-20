@@ -86,9 +86,13 @@ pub struct OAuthConfig {
     pub refresh_scopes: Vec<String>,
 }
 
-/// How a login surfaces to the user. The CLI prints and reads stdin; the Tauri
-/// app opens a system browser and shows a text field.
-pub trait LoginUi {
+/// How a login surfaces to the user. The CLI prints and reads stdin; the
+/// daemon hands the URL to whichever viewer asked and waits.
+///
+/// `Send + Sync` because the daemon runs a login on a spawned task, and a
+/// `&dyn LoginUi` held across an await would otherwise make that future
+/// non-`Send`. Costs the terminal implementation nothing.
+pub trait LoginUi: Send + Sync {
     /// Present the authorize URL (open a browser, print it, or both).
     fn open(&self, url: &str) -> Result<()>;
     /// Ask the user to paste the code, blocking. Used by `HostedPaste`.
@@ -97,6 +101,21 @@ pub trait LoginUi {
     /// A non-blocking source of a pasted code, raced against the loopback
     /// listener. Returning `None` disables pasting for that login.
     fn paste_channel(&self) -> Option<tokio::sync::oneshot::Receiver<String>> {
+        None
+    }
+
+    /// Async replacement for [`Self::read_code`], for UIs that must not block.
+    ///
+    /// Distinct from [`Self::paste_channel`], which is *optional* — an extra
+    /// way to finish a loopback login when the browser cannot reach us. This
+    /// one is the only way a [`RedirectMode::HostedPaste`] flow ever gets its
+    /// code, so a UI that implements it must eventually deliver or drop the
+    /// sender.
+    ///
+    /// The default keeps the blocking path, which is right for a terminal:
+    /// `uw` has nothing else to do while it waits on stdin. A daemon serving
+    /// other viewers does, and cannot park a runtime thread on a human.
+    fn code_channel(&self) -> Option<tokio::sync::oneshot::Receiver<String>> {
         None
     }
 }
@@ -210,7 +229,10 @@ impl OAuthClient {
             RedirectMode::HostedPaste { redirect_uri } => {
                 ui.open(&self.authorize_url(redirect_uri, &pkce.challenge, &state)?)?;
 
-                let pasted = ui.read_code()?;
+                let pasted = match ui.code_channel() {
+                    Some(rx) => rx.await.context("the login was abandoned")?,
+                    None => ui.read_code()?,
+                };
                 let (code, returned_state) = split_pasted_code(&pasted);
 
                 // The hosted page appends the state as a fragment. When it is

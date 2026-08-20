@@ -43,8 +43,14 @@ body {
 }
 
 #app {
-  /* The Tauri window is sized to the content, so the body must not scroll. */
-  overflow: hidden;
+  /* No horizontal scroll: the window is sized to the panel's width, and a
+     sideways scrollbar in a 340px popover is always a layout bug.
+     Vertically it does scroll, as a fallback — the config screens ask the
+     shell to grow the window, and if a platform ever declines, scrolling is
+     recoverable where clipping the buttons off the bottom is not. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: 100vh;
 }
 
 /* Phones. The same bundle runs in a tray popover 340px wide and full-screen on

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { DEFAULTS, settings } from "../lib/settings";
+import { autoUrl, DEFAULTS, settings } from "../lib/settings";
 import { isAutostartEnabled, setAutostart } from "../lib/autostart";
 
 const emit = defineEmits<{ close: [] }>();
@@ -50,7 +50,7 @@ function reset() {
           autocapitalize="off"
           autocorrect="off"
           spellcheck="false"
-          placeholder="http://127.0.0.1:7878"
+          :placeholder="autoUrl"
         />
       </label>
 
@@ -67,8 +67,10 @@ function reset() {
       </label>
 
       <p class="hint">
-        <code>uwd</code> needs no token on loopback, and refuses to bind anything
-        else without one.
+        Leave the address blank to use the collector this app started
+        (<code>{{ autoUrl }}</code>). Point it somewhere else to watch a daemon
+        on another machine — which needs a token, because <code>uwd</code>
+        refuses to bind anything but loopback without one.
       </p>
 
       <label v-if="autostart !== null" class="row">

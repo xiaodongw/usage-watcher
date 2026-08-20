@@ -16,10 +16,31 @@ export interface Settings {
 
 const KEY = "usage-watcher.daemon";
 
+/**
+ * An empty `url` means "wherever the app found one" — see {@link autoUrl}. It
+ * is the default because on the desktop the app starts its own daemon on
+ * whatever port is free, and hard-coding 7878 here would send the UI to a port
+ * nothing is listening on the moment something else had taken it.
+ */
 export const DEFAULTS: Settings = {
-  url: (import.meta.env.VITE_UWD_URL ?? "http://127.0.0.1:7878") as string,
+  url: (import.meta.env.VITE_UWD_URL ?? "") as string,
   token: (import.meta.env.VITE_UWD_TOKEN ?? "") as string,
 };
+
+/**
+ * Where the daemon actually is, when the user has not said otherwise.
+ *
+ * Set once at startup from the Tauri shell, which either started a daemon
+ * in-process or found one already listening. In a plain browser it stays at the
+ * conventional port, which is what `uwd` binds by default.
+ */
+export const autoUrl = ref(
+  (import.meta.env.VITE_UWD_URL ?? "http://127.0.0.1:7878") as string,
+);
+
+export function setAutoUrl(url: string) {
+  autoUrl.value = url;
+}
 
 function load(): Settings {
   try {
@@ -59,7 +80,19 @@ watch(
 
 /** Trailing slashes are the most common paste error, and they double up in URLs. */
 export function baseUrl(s: Settings = settings.value): string {
-  return s.url.trim().replace(/\/+$/, "");
+  return (s.url.trim() || autoUrl.value).replace(/\/+$/, "");
+}
+
+/**
+ * Auth for `fetch`, which — unlike `EventSource` — can set headers.
+ *
+ * Preferred over the query parameter wherever it is available: a token in a URL
+ * ends up in devtools, in logs, and in whatever the user pastes into a bug
+ * report.
+ */
+export function authHeaders(s: Settings = settings.value): Record<string, string> {
+  const token = s.token.trim();
+  return token ? { authorization: `Bearer ${token}` } : {};
 }
 
 /** `EventSource` cannot set headers, so the token travels as a query param. */

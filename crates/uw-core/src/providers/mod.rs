@@ -6,6 +6,7 @@
 
 pub mod claude;
 pub mod codex;
+pub mod manifest;
 pub mod opencode;
 pub mod openrouter;
 
@@ -16,9 +17,22 @@ use crate::auth::{AuthMode, Credential, TokenSource};
 use crate::model::Provider;
 use crate::Config;
 
+pub use manifest::{AuthMethod, LoginKind, ProviderInfo, Spec, TokenPrompt};
+
 /// Which auth mechanism a provider should use, from config.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[derive(
+    ts_rs::TS,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    Default,
+)]
 #[serde(rename_all = "kebab-case")]
+#[ts(export, export_to = "../../../widget/src/types/")]
 pub enum AuthPreference {
     /// Borrow the vendor CLI's credential, read-only. Safe, zero setup, but
     /// only works where that CLI is installed.
@@ -56,6 +70,57 @@ pub trait Adapter: Send + Sync {
     /// Where the vendor CLI keeps its credential.
     fn delegated_path(&self) -> Option<PathBuf>;
 
+    /// How this provider introduces itself to the config UI.
+    ///
+    /// Only the prose and the paste prompt: which login methods it offers is
+    /// worked out from the methods above, so the two can never disagree. See
+    /// [`manifest`].
+    fn spec(&self) -> Spec;
+
+    /// Default seconds between polls, `(active, idle)`, before any config
+    /// override and the 30-second floor.
+    ///
+    /// "Active" means something is currently being consumed. A provider that
+    /// only publishes a 7-day bucket learns nothing from a fast poll, so the
+    /// rhythm belongs to the adapter that knows what it is reading.
+    fn poll_intervals(&self) -> (u64, u64) {
+        (120, 600)
+    }
+
+    /// Parse the vendor CLI's credential file.
+    ///
+    /// Always read-only, and the result must never be refreshed: Claude and
+    /// Codex both rotate refresh tokens, so refreshing a borrowed one signs the
+    /// user out of the CLI they were borrowing from. Implementations therefore
+    /// withhold the refresh token — see [`claude::read_delegated`].
+    fn read_delegated(&self, _path: &Path) -> Result<Credential> {
+        bail!("`{}` does not support delegated auth", self.id())
+    }
+
+    /// What `uw auth adopt` should leave this provider set to, or `None` where
+    /// there is no vendor credential to take over.
+    ///
+    /// Not the same question as [`Self::delegated_path`]. Claude and Codex hand
+    /// over a rotating OAuth grant, which we then own and refresh — that is
+    /// [`AuthPreference::Own`], and it obliges the user to re-run the vendor
+    /// login. opencode hands over a static API key: a copy, not a transfer.
+    fn adopt_as(&self) -> Option<AuthPreference> {
+        None
+    }
+
+    /// The vendor command to re-run after an adopt, for providers where our
+    /// copy and theirs would otherwise share one rotating refresh token.
+    fn relogin_hint(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Read the vendor credential *including* what [`Self::read_delegated`]
+    /// deliberately withholds. The single deliberate exception to the rule
+    /// above, and only ever reached from `uw auth adopt`.
+    fn read_full_credential(&self, _path: &Path) -> Result<Credential> {
+        bail!("`{}` has no vendor credential to adopt", self.id())
+    }
+
     /// Capture provider facts that exist outside the token response, once, at
     /// login. Anything written into `cred.extra` here survives refreshes.
     ///
@@ -79,14 +144,21 @@ pub trait Adapter: Send + Sync {
         kind: crate::model::AuthKind,
     ) -> impl std::future::Future<Output = Result<Provider>> + Send;
 
+    /// Where a pasted token is stored.
+    ///
+    /// A distinct key from the own-grant entry so the two can coexist and you
+    /// can switch between them without re-entering either. Spelled once here
+    /// because three call sites used to format it by hand, and a fourth that
+    /// got it wrong would have looked exactly like "your token vanished".
+    fn token_entry(&self) -> String {
+        format!("{}-token", self.id())
+    }
+
     fn auth_mode(&self, pref: AuthPreference) -> Result<AuthMode> {
         match pref {
             AuthPreference::Own => Ok(AuthMode::OwnGrant(self.oauth_config()?)),
-            // Stored under a distinct key so a pasted token and an OAuth grant
-            // can coexist and you can switch between them without re-entering
-            // either one.
             AuthPreference::Token => Ok(AuthMode::ApiKey {
-                keyring_entry: format!("{}-token", self.id()),
+                keyring_entry: self.token_entry(),
             }),
             AuthPreference::Delegated => match self.delegated_path() {
                 Some(cred_path) => Ok(AuthMode::Delegated { cred_path }),
@@ -198,64 +270,103 @@ impl Any {
             .unwrap_or_else(|| self.default_auth())
     }
 
-    /// Default poll intervals in seconds, `(active, idle)`, before config
-    /// overrides and the 30-second floor.
-    ///
-    /// "Active" means the provider is currently consuming something. Claude's
-    /// 5-hour window moves fast enough to be worth a minute; Codex only
-    /// publishes a 7-day bucket, so polling it that often would tell us
-    /// nothing new. OpenRouter is slowest of all: a prepaid balance only moves
-    /// when you spend, and the account wallet is not a per-request counter.
+    /// Seconds between polls, `(active, idle)`. See [`Adapter::poll_intervals`].
     pub fn poll_intervals(&self) -> (u64, u64) {
-        match self {
-            Any::Claude(_) => (60, 300),
-            Any::Codex(_) => (120, 600),
-            Any::Opencode(_) => (120, 600),
-            Any::OpenRouter(_) => (300, 900),
-        }
+        dispatch!(self, |a| a.poll_intervals())
     }
 
-    /// What `uw auth adopt` should leave the provider set to, or `None` where
-    /// there is no vendor credential to adopt.
-    ///
-    /// The two answers are not the same thing. Claude and Codex hand over a
-    /// rotating OAuth grant, which we then own and refresh — that is
-    /// [`AuthPreference::Own`], and it obliges the user to re-run the vendor
-    /// login. opencode hands over a static API key, which is a copy, not a
-    /// transfer: nothing rotates and the CLI is unaffected.
+    /// See [`Adapter::adopt_as`].
     pub fn adopt_as(&self) -> Option<AuthPreference> {
-        match self {
-            Any::Claude(_) | Any::Codex(_) => Some(AuthPreference::Own),
-            Any::Opencode(_) => Some(AuthPreference::Token),
-            Any::OpenRouter(_) => None,
-        }
+        dispatch!(self, |a| a.adopt_as())
     }
 
-    /// The vendor command to re-run after an adopt, for providers where our
-    /// copy and theirs would otherwise share one rotating refresh token.
+    /// See [`Adapter::relogin_hint`].
     pub fn relogin_hint(&self) -> Option<&'static str> {
-        match self {
-            Any::Claude(_) => Some("claude auth login"),
-            Any::Codex(_) => Some("codex login"),
-            // Static keys. Copying one changes nothing for the CLI.
-            Any::Opencode(_) | Any::OpenRouter(_) => None,
-        }
+        dispatch!(self, |a| a.relogin_hint())
     }
 
-    /// Read the vendor credential *including* anything [`read_delegated`]
-    /// deliberately withholds, for `uw auth adopt`. See the note on
-    /// [`claude::read_full_credential`].
+    /// See [`Adapter::read_delegated`].
+    pub fn read_delegated(&self, path: &Path) -> Result<Credential> {
+        dispatch!(self, |a| a.read_delegated(path))
+    }
+
+    /// The vendor credential, path included, for `uw auth adopt`.
     pub fn read_full_credential(&self) -> Result<(PathBuf, Credential)> {
         let Some(path) = self.delegated_path() else {
             bail!("`{}` has no vendor credential file to adopt", self.id());
         };
-        let cred = match self {
-            Any::Claude(_) => claude::read_full_credential(&path)?,
-            Any::Codex(_) => codex::read_full_credential(&path)?,
-            Any::Opencode(_) => opencode::read_full_credential(&path)?,
-            Any::OpenRouter(_) => bail!("`openrouter` has no vendor credential to adopt"),
-        };
+        let cred = dispatch!(self, |a| a.read_full_credential(&path))?;
         Ok((path, cred))
+    }
+
+    /// Everything the config UI needs to offer this provider.
+    ///
+    /// Assembled here rather than declared by the adapter, so "offers a browser
+    /// login" always means "has an OAuth config" and cannot drift from it.
+    /// Touches the filesystem — `delegated_path().exists()` is how a method
+    /// reports itself unavailable — so call it per request, not once at
+    /// startup: installing the vendor CLI must not require a restart.
+    pub fn info(&self) -> ProviderInfo {
+        manifest::build(
+            self.id(),
+            self.label(),
+            dispatch!(self, |a| a.spec()),
+            self.default_auth(),
+            self.oauth_config().err().map(|e| format!("{e:#}")),
+            self.delegated_path(),
+        )
+    }
+
+    /// The OAuth parameters for an own grant, or why there are none.
+    pub fn oauth_config(&self) -> Result<crate::auth::OAuthConfig> {
+        dispatch!(self, |a| a.oauth_config())
+    }
+
+    /// See [`Adapter::token_entry`].
+    pub fn token_entry(&self) -> String {
+        dispatch!(self, |a| a.token_entry())
+    }
+
+    /// See [`Adapter::auth_mode`].
+    pub fn auth_mode(&self, pref: AuthPreference) -> Result<AuthMode> {
+        dispatch!(self, |a| a.auth_mode(pref))
+    }
+
+    /// Whether a credential for this mode exists *right now*, without spending
+    /// a network round trip to find out.
+    ///
+    /// Deliberately not "is the credential valid": the config screen asks this
+    /// on every render, and validating an own grant means possibly refreshing
+    /// it. "Signed in" versus "not signed in" is the distinction that changes
+    /// what the UI offers; whether the token still works is what the provider
+    /// tile is for.
+    pub fn has_credential(&self, pref: AuthPreference) -> Result<bool> {
+        use crate::auth::TokenStore;
+        Ok(match self.auth_mode(pref)? {
+            AuthMode::OwnGrant(_) => TokenStore::load(self.id())?.is_some(),
+            AuthMode::ApiKey { keyring_entry } => TokenStore::load(&keyring_entry)?.is_some(),
+            // Nothing of ours to hold: the vendor CLI's file either exists or
+            // it does not.
+            AuthMode::Delegated { cred_path } => cred_path.exists(),
+        })
+    }
+
+    /// Delete every credential this provider could have stored.
+    ///
+    /// Both entries, not just the one the current mode uses: removing a
+    /// provider in the UI must not leave a token behind that silently comes
+    /// back to life when it is added again months later. Never touches the
+    /// vendor CLI's own file — that is not ours to delete.
+    pub fn forget_credentials(&self) -> Result<()> {
+        use crate::auth::TokenStore;
+        TokenStore::delete(self.id())?;
+        TokenStore::delete(&self.token_entry())?;
+        Ok(())
+    }
+
+    /// Every provider, as the "Add provider" screen sees them.
+    pub fn catalogue() -> Vec<ProviderInfo> {
+        Any::all().iter().map(Any::info).collect()
     }
 
     /// `None` for an id we do not have an adapter for.
@@ -273,16 +384,14 @@ impl Any {
     }
 }
 
-/// Read a vendor CLI's credential file. Dispatches on provider id because each
-/// CLI uses a different on-disk shape.
+/// Read a vendor CLI's credential file, for callers that hold an id rather
+/// than an adapter — [`crate::auth::TokenSource`] is the only one.
 ///
 /// Always opened read-only, and the caller must never refresh the result.
 pub fn read_delegated(provider: &str, path: &Path) -> Result<Credential> {
-    match provider {
-        "claude" => claude::read_delegated(path),
-        "codex" => codex::read_delegated(path),
-        "opencode" => opencode::read_delegated(path),
-        other => bail!("`{other}` does not support delegated auth"),
+    match Any::by_id(provider) {
+        Some(a) => a.read_delegated(path),
+        None => bail!("unknown provider `{provider}`"),
     }
 }
 

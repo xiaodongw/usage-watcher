@@ -12,7 +12,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use std::path::PathBuf;
 
-use super::{Adapter, AuthPreference};
+use super::{Adapter, AuthPreference, Spec};
 use crate::auth::{Credential, Flow, OAuthConfig, RedirectMode, TokenBody};
 use crate::model::{AuthKind, Meter, MeterKind, Period, Provider, Severity, Status};
 
@@ -69,6 +69,28 @@ impl Adapter for OpenRouter {
 
     fn delegated_path(&self) -> Option<PathBuf> {
         None
+    }
+
+    fn spec(&self) -> Spec {
+        Spec::new(
+            "OpenRouter — credits left on the account, and any cap on the key \
+             itself.",
+            "#8b5cf6",
+        )
+        .docs("https://openrouter.ai/docs")
+        .token(
+            "Paste an API key",
+            "API key",
+            "sk-or-v1-…",
+            "Create a key in your OpenRouter dashboard.",
+            Some("https://openrouter.ai/settings/keys"),
+        )
+    }
+
+    /// The slowest of the four. A prepaid balance only moves when you spend,
+    /// and the account wallet is not a per-request counter.
+    fn poll_intervals(&self) -> (u64, u64) {
+        (300, 900)
     }
 
     async fn fetch(

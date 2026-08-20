@@ -21,6 +21,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub use oauth::{Credential, Flow, LoginUi, OAuthClient, OAuthConfig, RedirectMode, TokenBody};
+pub use pkce::random_id;
 pub use store::TokenStore;
 
 use crate::model::AuthKind;
@@ -130,7 +131,8 @@ impl TokenSource {
             AuthMode::ApiKey { keyring_entry } => match TokenStore::load(keyring_entry)? {
                 Some(c) => Ok(c),
                 None => bail!(
-                    "no API key stored for `{}` — run `uw auth login {}`",
+                    "no API key stored for `{}` — paste one from the panel, or run \
+                     `uw auth token {}`",
                     self.provider,
                     self.provider
                 ),
@@ -146,8 +148,12 @@ impl TokenSource {
         }
 
         let Some(cred) = guard.clone() else {
+            // Worded for both front ends. This lands in a provider tile as
+            // often as it lands in a terminal, and "run `uw auth login`" on a
+            // Windows machine with no CLI installed is a dead end.
             bail!(
-                "not signed in to `{}` — run `uw auth login {}`",
+                "not signed in to `{}` — sign in from the panel, or run \
+                 `uw auth login {}`",
                 self.provider,
                 self.provider
             );
@@ -160,7 +166,7 @@ impl TokenSource {
         let Some(rt) = cred.refresh_token.clone() else {
             bail!(
                 "`{}` credential expired and carries no refresh token — \
-                 run `uw auth login {}` again",
+                 sign in again from the panel, or run `uw auth login {}`",
                 self.provider,
                 self.provider
             );
