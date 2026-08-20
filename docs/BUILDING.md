@@ -118,27 +118,9 @@ the same Vue app the native shells host.
 
 ```sh
 sudo apt update
-sudo apt install build-essential pkg-config \
-                 libwebkit2gtk-4.1-dev libgtk-3-dev \
-                 libayatana-appindicator3-dev libglib2.0-dev libdbus-1-dev
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+                 libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 ```
-
-Six packages, and the two in the middle are the ones that matter.
-`libwebkit2gtk-4.1-dev` brings `javascriptcoregtk-4.1` and `libsoup-3.0` with
-it; `libgtk-3-dev` brings `gdk-3.0`, `gdk-x11-3.0`, `gdk-wayland-3.0`,
-`gdk-pixbuf-2.0`, `cairo`, `pango` and `atk`. **Install those two rather than
-the modules the build names.** Cargo reports one missing pkg-config module per
-attempt, ten minutes apart, and always by module rather than by package — so
-the obvious response is to install the leaf it named and start again, which
-means climbing the tree from the bottom while the two packages holding the
-whole set stay missing. `scripts/package.sh` now checks all of them up front
-and prints one `apt install` line; it takes about fifty milliseconds to say no.
-
-Two packages Tauri's own documentation lists are deliberately **not** here:
-`libxdo-dev` and `librsvg2-dev`. Nothing in this app's dependency tree links
-either — `cargo tree` shows no `xdo-sys` and no `rsvg-sys` — and `libssl-dev`
-is likewise absent because TLS here is `rustls`, as [Common to
-everything](#common-to-everything) says.
 
 Fedora:
 
@@ -477,13 +459,6 @@ built on its own OS.
 missing. See [Linux and WSL](#linux-and-wsl). Note it is `4.1`, not `4.0`;
 Tauri v1 used the older one and a stale guide will send you to the wrong
 package.
-
-**Installing the package it named, and then hitting a different one** — you are
-climbing the dependency tree from the leaves. `atk`, `pango`, `libsoup-3.0` and
-`javascriptcoregtk-4.1` are all pulled in by `libgtk-3-dev` and
-`libwebkit2gtk-4.1-dev`, so satisfying them individually never gets you closer
-to having those two. Run `scripts/package.sh`, which checks every module before
-building anything and prints the whole `apt install` line at once.
 
 **`linker 'cc' not found` on Windows** — the C++ workload of the Visual Studio
 Build Tools was not installed, only the installer itself.
